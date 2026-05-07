@@ -344,3 +344,73 @@ async def get_draft_by_owner():
                 owners[o] = {"owner": o, "team_id": row["team_id"], "positions": {}}
             owners[o]["positions"][row["position"]] = row["times_drafted"]
         return list(owners.values())
+
+
+@router.get("/scoring/highest-losing-scores")
+async def get_highest_losing_scores(limit: int = 10):
+    """Highest scores that still resulted in a loss — the unluckiest weeks."""
+    async with (await get_pool()).acquire() as db:
+        rows = await db.fetch("""
+            SELECT
+                m.season,
+                m.week,
+                m.is_playoffs,
+                t.owner,
+                t.team_id,
+                CASE WHEN m.home_team_id = t.team_id
+                     THEN m.home_score ELSE m.away_score END    AS score,
+                CASE WHEN m.home_team_id = t.team_id
+                     THEN m.away_score ELSE m.home_score END    AS opp_score,
+                t_opp.owner                                     AS opponent
+            FROM matchups m
+            JOIN teams t ON t.team_id IN (m.home_team_id, m.away_team_id)
+            JOIN teams t_opp ON t_opp.team_id = CASE
+                WHEN m.home_team_id = t.team_id THEN m.away_team_id
+                ELSE m.home_team_id
+            END
+            WHERE m.winner_team_id != t.team_id
+              AND m.winner_team_id IS NOT NULL
+            ORDER BY score DESC
+            LIMIT $1
+        """, limit)
+        return [
+            {**dict(row), "score": float(row["score"]),
+             "opp_score": float(row["opp_score"])}
+            for row in rows
+        ]
+
+
+@router.get("/scoring/lowest-winning-scores")
+async def get_lowest_winning_scores(limit: int = 10):
+    """Lowest scores that still resulted in a win — the luckiest weeks."""
+    async with (await get_pool()).acquire() as db:
+        rows = await db.fetch("""
+            SELECT
+                m.season,
+                m.week,
+                m.is_playoffs,
+                t.owner,
+                t.team_id,
+                CASE WHEN m.home_team_id = t.team_id
+                     THEN m.home_score ELSE m.away_score END    AS score,
+                CASE WHEN m.home_team_id = t.team_id
+                     THEN m.away_score ELSE m.home_score END    AS opp_score,
+                t_opp.owner                                     AS opponent
+            FROM matchups m
+            JOIN teams t ON t.team_id IN (m.home_team_id, m.away_team_id)
+            JOIN teams t_opp ON t_opp.team_id = CASE
+                WHEN m.home_team_id = t.team_id THEN m.away_team_id
+                ELSE m.home_team_id
+            END
+            WHERE m.winner_team_id = t.team_id
+              AND CASE WHEN m.home_team_id = t.team_id
+                       THEN m.away_score
+                       ELSE m.home_score END > 0
+            ORDER BY score ASC
+            LIMIT $1
+        """, limit)
+        return [
+            {**dict(row), "score": float(row["score"]),
+             "opp_score": float(row["opp_score"])}
+            for row in rows
+        ]
