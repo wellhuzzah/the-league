@@ -39,6 +39,11 @@ async def get_alltime_standings():
                     max(row["total_wins"] + row["total_losses"], 1),
                     3
                 ),
+                "ppg": round(
+                    float(row["total_points_for"]) /
+                    max(row["total_wins"] + row["total_losses"], 1),
+                    2
+                ),
             }
             for row in rows
         ]

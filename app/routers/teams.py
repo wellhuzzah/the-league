@@ -91,6 +91,8 @@ async def get_team(team_id: int):
         career = await db.fetchrow("""
             SELECT
                 COUNT(*)                                            AS seasons_played,
+                MIN(season)                                         AS first_season,
+                MAX(season)                                         AS last_season,
                 SUM(wins)                                           AS total_wins,
                 SUM(losses)                                         AS total_losses,
                 SUM(draws)                                         AS total_draws,
@@ -150,6 +152,8 @@ async def get_team(team_id: int):
             "owner":   team["owner"],
             "career": {
                 "seasons_played":      career["seasons_played"],
+                "first_season":        career["first_season"],
+                "last_season":         career["last_season"],
                 "total_wins":          career["total_wins"] or 0,
                 "total_losses":        career["total_losses"] or 0,
                 "total_draws":         career["total_draws"] or 0,

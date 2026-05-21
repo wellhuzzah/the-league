@@ -148,3 +148,31 @@ async def get_season_luck(year: int):
         if not rows:
             raise HTTPException(status_code=404, detail="Season not found")
         return [dict(row) for row in rows]
+
+
+@router.get("/{year}/top-scorer")
+async def get_season_top_scorer(year: int):
+    """Highest-scoring individual player (starters only) for the season."""
+    async with (await get_pool()).acquire() as db:
+        row = await db.fetchrow("""
+            SELECT
+                bs.player_name,
+                bs.position,
+                t.owner,
+                SUM(bs.points_scored) AS total_points
+            FROM box_scores bs
+            JOIN teams t ON bs.team_id = t.team_id
+            WHERE bs.season = $1
+              AND bs.is_starter = TRUE
+            GROUP BY bs.player_name, bs.position, t.owner
+            ORDER BY total_points DESC
+            LIMIT 1
+        """, year)
+        if not row:
+            raise HTTPException(status_code=404, detail="No scorer data for this season")
+        return {
+            "player_name":  row["player_name"],
+            "position":     row["position"],
+            "owner":        row["owner"],
+            "total_points": float(row["total_points"]),
+        }
