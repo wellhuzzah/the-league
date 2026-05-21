@@ -2,5 +2,7 @@ venv/
 __pycache__/
 *.pyc
 .env
-yahoo_inaugural_import.py
-ddns_update.py
+.claude/
+/*.py
+*.md
+*.sql
