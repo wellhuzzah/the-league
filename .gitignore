@@ -4,5 +4,6 @@ __pycache__/
 .env
 .claude/
 /*.py
+!/espn_import.py
 *.md
 *.sql
