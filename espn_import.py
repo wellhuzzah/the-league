@@ -542,7 +542,10 @@ async def run(season, dry_run, weeks=None, box_scores_only=False):
 
 			decided, id_map, completed_weeks = await do_matchups(
 				conn, sess, season, season_map, dry_run, summary, warnings)
-			matchups = [{"id": id_map.get((m["week"], m["h_id"], m["a_id"])),  # None on dry run
+			# id_map is empty on a dry run; fall back to matchups already in the DB so
+			# existing box_scores rows can still be compared (None only for new matchups).
+			db_ids = {(m["week"], m["h_id"], m["a_id"]): m["id"] for m in await load_matchups(conn, season)}
+			matchups = [{"id": id_map.get((m["week"], m["h_id"], m["a_id"])) or db_ids.get((m["week"], m["h_id"], m["a_id"])),
 			             "week": m["week"], "h_id": m["h_id"], "a_id": m["a_id"],
 			             "h_score": m["h_score"], "a_score": m["a_score"]} for m in decided]
 			await do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
