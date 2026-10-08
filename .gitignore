@@ -9,5 +9,6 @@ __pycache__/
 !/espn_transactions_import.py
 *.md
 *.sql
+!/schema_v3.sql
 /espn_raw/
 /backups/

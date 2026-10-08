@@ -167,7 +167,7 @@ async def get_season_top_scorer(year: int):
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
             GROUP BY bs.player_name, bs.position, t.owner
-            ORDER BY total_points DESC
+            ORDER BY total_points DESC, bs.player_name, bs.position, t.owner
             LIMIT 1
         """, year)
         if not row:

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import seasons, records, draft, matchups, teams, boxscores
+from app.routers import tower
 
 app = FastAPI()
 
@@ -22,6 +23,7 @@ app.include_router(draft.router)
 app.include_router(matchups.router)
 app.include_router(teams.router)
 app.include_router(boxscores.router)
+app.include_router(tower.router)
 
 @app.get("/")
 async def root():

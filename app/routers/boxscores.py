@@ -33,7 +33,7 @@ async def get_top_performances(limit: int = 25, position: str = None):
                 END
                 WHERE bs.position = $2
                   AND bs.is_starter = TRUE
-                ORDER BY bs.points_scored DESC
+                ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
                 LIMIT $1
             """, limit, position)
         else:
@@ -57,7 +57,7 @@ async def get_top_performances(limit: int = 25, position: str = None):
                     ELSE m.home_team_id
                 END
                 WHERE bs.is_starter = TRUE
-                ORDER BY bs.points_scored DESC
+                ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
                 LIMIT $1
             """, limit)
         return [
@@ -121,7 +121,7 @@ async def get_team_boxscores(team_id: int, season: int = None, include_bench: bo
                 JOIN matchups m ON bs.matchup_id = m.id
                 WHERE bs.team_id = $1 AND bs.season = $2
                   AND (bs.is_starter = TRUE OR $3)
-                ORDER BY bs.week, bs.points_scored DESC
+                ORDER BY bs.week, bs.points_scored DESC, bs.espn_player_id
             """, team_id, season, include_bench)
         else:
             rows = await db.fetch("""
@@ -137,7 +137,7 @@ async def get_team_boxscores(team_id: int, season: int = None, include_bench: bo
                 JOIN matchups m ON bs.matchup_id = m.id
                 WHERE bs.team_id = $1
                   AND (bs.is_starter = TRUE OR $2)
-                ORDER BY bs.season, bs.week, bs.points_scored DESC
+                ORDER BY bs.season, bs.week, bs.points_scored DESC, bs.espn_player_id
             """, team_id, include_bench)
 
         return {
@@ -172,7 +172,7 @@ async def get_team_best_weeks(team_id: int, limit: int = 10):
             END
             WHERE bs.team_id = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.espn_player_id
             LIMIT $2
         """, team_id, limit)
         return [
@@ -198,7 +198,7 @@ async def get_team_position_totals(team_id: int):
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
             GROUP BY bs.season, bs.position
-            ORDER BY bs.season, total_points DESC
+            ORDER BY bs.season, total_points DESC, bs.position
         """, team_id)
 
         seasons = {}
@@ -235,7 +235,7 @@ async def get_player_history(player_name: str):
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.player_name ILIKE $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
         """, f"%{player_name}%")
 
         if not rows:
@@ -276,7 +276,7 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
             JOIN teams t ON bs.team_id = t.team_id
             WHERE bs.season = $1 AND bs.week = $2
               AND (bs.is_starter = TRUE OR $3)
-            ORDER BY t.owner, bs.points_scored DESC
+            ORDER BY t.owner, bs.team_id, bs.points_scored DESC, bs.espn_player_id
         """, season, week, include_bench)
 
         if not rows:
@@ -352,7 +352,7 @@ async def get_random_player():
             END
             WHERE bs.player_name = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
             LIMIT 1
         """, name)
 
@@ -364,7 +364,7 @@ async def get_random_player():
             WHERE bs.player_name = $1
               AND bs.is_starter = TRUE
             GROUP BY t.owner, t.team_id
-            ORDER BY appearances DESC
+            ORDER BY appearances DESC, t.owner, t.team_id
             LIMIT 1
         """, name)
 
@@ -467,8 +467,7 @@ async def get_position_summary(position: str):
             END
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
-              AND NOT m.is_playoffs
-            ORDER BY bs.points_scored DESC
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
             LIMIT 10
         """, pos)
 
@@ -487,8 +486,7 @@ async def get_position_summary(position: str):
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
-              AND NOT m.is_playoffs
-            ORDER BY bs.points_scored ASC
+            ORDER BY bs.points_scored ASC, bs.season, bs.week, bs.team_id, bs.espn_player_id
             LIMIT 5
         """, pos)
 
@@ -506,7 +504,7 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
             GROUP BY bs.player_name
-            ORDER BY appearances DESC
+            ORDER BY appearances DESC, bs.player_name
             LIMIT 10
         """, pos)
 
