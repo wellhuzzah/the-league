@@ -153,9 +153,11 @@ async def get_value_history(limit: int = 25):
                 COUNT(bs.week) AS weeks_active
             FROM draft_picks dp
             JOIN teams t ON dp.team_id = t.team_id
-            LEFT JOIN box_scores bs
+            LEFT JOIN (box_scores bs
+                       JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
                 ON bs.player_name = dp.player_name
                AND bs.season = dp.season
+               AND bs.is_starter = TRUE
             GROUP BY dp.season, dp.player_name, dp.position, dp.overall_pick,
                      dp.round_num, dp.pick_in_round, dp.is_keeper, t.owner
             ORDER BY dp.season, dp.overall_pick
@@ -333,9 +335,11 @@ async def get_draft_value(year: int):
                 COUNT(bs.week) AS weeks_active
             FROM draft_picks dp
             JOIN teams t ON dp.team_id = t.team_id
-            LEFT JOIN box_scores bs
+            LEFT JOIN (box_scores bs
+                       JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
                 ON bs.player_name = dp.player_name
                AND bs.season = dp.season
+               AND bs.is_starter = TRUE
             WHERE dp.season = $1
             GROUP BY dp.player_name, dp.position, dp.overall_pick, dp.round_num,
                      dp.pick_in_round, dp.is_keeper, t.owner

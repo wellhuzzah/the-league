@@ -5,10 +5,16 @@ espn_import.py — import an in-progress ESPN fantasy season into the Rockwood D
 Usage:
 	python espn_import.py --season 2026
 	python espn_import.py --season 2026 --dry-run
+	python espn_import.py --season 2021 --box-scores-only --weeks 1-13 --dry-run
 
 Imports, in order: espn_team_map -> matchups -> box_scores -> draft_picks.
 Only COMPLETED matchups (winner != UNDECIDED) are written. Never writes to
-the `records` table. See the conventions enforced below (starters only, etc.).
+the `records` table. box_scores holds the full roster (starters, bench, IR);
+lineup_slot is ESPN's lineupSlotId and is_starter = slot NOT IN (20, 21).
+Teams with no matchup that week (playoff byes) get no box_scores rows.
+--box-scores-only re-imports box_scores for any season without touching
+espn_team_map, matchups or draft_picks. Every ESPN response is archived to
+espn_raw/ (see espn_raw.py).
 """
 
 import argparse
@@ -23,6 +29,8 @@ import asyncpg
 import requests
 from dotenv import load_dotenv
 
+from espn_raw import fetch_archived
+
 load_dotenv()
 
 LEAGUE_ID = 543248
@@ -35,13 +43,15 @@ EXPECTED_STARTERS = 9  # QB, 2x RB, 2x WR, TE, FLEX, K, D/ST
 # defaultPositionId -> position label (source of truth for the `position` column)
 DEFAULT_POS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "D/ST"}
 
-# lineupSlotId -> slot label (source for the `lineup_slot` column; nothing in the
-# app reads this column, so we store the real slot rather than the legacy 'QB').
+# lineupSlotId -> slot label. box_scores.lineup_slot stores the ESPN id itself;
+# the labels are only for messages. An id not listed here stops the import.
+# (The pre-2026 importer read rosterForMatchupPeriod, which holds starters only
+# and reports every slot as 0 — hence the old starters-only rows with 'QB'.)
 SLOT_LABEL = {
 	0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "D/ST", 17: "K", 23: "FLEX",
 	20: "BE", 21: "IR",
 }
-BENCH_SLOTS = {20, 21}  # excluded; everything else counts as a starter
+BENCH_SLOTS = {20, 21}  # is_starter = lineup_slot NOT IN (20, 21)
 
 
 def dec(x):
@@ -67,10 +77,7 @@ def espn_session():
 
 
 def fetch_league(sess, year, views, scoring_period=None):
-	params = [("view", v) for v in views]
-	if scoring_period is not None:
-		params.append(("scoringPeriodId", scoring_period))
-	r = sess.get(BASE_URL.format(year=year), params=params, timeout=60)
+	r = fetch_archived(sess, BASE_URL.format(year=year), year, views, period=scoring_period, timeout=60)
 	r.raise_for_status()
 	data = r.json()
 	if not isinstance(data, dict):
@@ -87,7 +94,7 @@ def fetch_players(sess, year):
 			}
 		})
 	}
-	r = sess.get(PLAYERS_URL.format(year=year), params={"view": "kona_player_info"}, headers=hdr, timeout=60)
+	r = fetch_archived(sess, PLAYERS_URL.format(year=year), year, ["kona_player_info"], headers=hdr, timeout=60)
 	r.raise_for_status()
 	rows = r.json()
 	players = {}
@@ -119,12 +126,30 @@ def resolve_name_pos(players, pid, embedded_player):
 	return name, pos
 
 
-def actual_points(player_obj, week):
-	"""Pull the week's ACTUAL (statSourceId=0) applied total from a player's stats."""
+def stat_total(player_obj, week, source):
+	"""Pull the week's applied total for a stat source (0 = actual, 1 = projected)."""
 	for st in (player_obj or {}).get("stats", []) or []:
-		if st.get("scoringPeriodId") == week and st.get("statSourceId") == 0:
+		if st.get("scoringPeriodId") == week and st.get("statSourceId") == source:
 			return st.get("appliedTotal")
 	return None
+
+
+def actual_points(player_obj, week):
+	"""Pull the week's ACTUAL (statSourceId=0) applied total from a player's stats."""
+	return stat_total(player_obj, week, 0)
+
+
+def parse_weeks(spec):
+	"""'1-13' / '14,15,16' / '1-3,14' -> set of ints."""
+	weeks = set()
+	for part in spec.split(","):
+		part = part.strip()
+		if "-" in part:
+			lo, hi = part.split("-", 1)
+			weeks.update(range(int(lo), int(hi) + 1))
+		elif part:
+			weeks.add(int(part))
+	return weeks
 
 
 # --------------------------------------------------------------------------- #
@@ -262,96 +287,187 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 # --------------------------------------------------------------------------- #
 # Step C — box_scores
 # --------------------------------------------------------------------------- #
-async def do_box_scores(conn, sess, season, season_map, decided, id_map,
-                        players, dry_run, summary, warnings):
-	# group decided matchups by week
-	by_week = defaultdict(list)
-	for m in decided:
-		by_week[m["week"]].append(m)
+async def load_team_map(conn, season):
+	"""espn_team_id -> internal team_id from espn_team_map (used by --box-scores-only)."""
+	rows = await conn.fetch("SELECT espn_team_id, team_id FROM espn_team_map WHERE season = $1", dec(season))
+	if not rows:
+		sys.exit(f"ERROR: espn_team_map has no rows for {season}.")
+	return {r["espn_team_id"]: r["team_id"] for r in rows}
 
-	per_week_rows = {}
-	ins = upd = 0
+
+async def load_matchups(conn, season):
+	"""Matchups already in the DB for a season, in the shape do_box_scores expects."""
+	rows = await conn.fetch("""
+		SELECT id, week, home_team_id, away_team_id, home_score, away_score
+		FROM matchups WHERE season = $1
+	""", dec(season))
+	return [{"id": r["id"], "week": r["week"], "h_id": r["home_team_id"], "a_id": r["away_team_id"],
+	         "h_score": r["home_score"], "a_score": r["away_score"]} for r in rows]
+
+
+async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
+                        dry_run, summary, warnings):
+	"""Full roster (starters, bench, IR) for every matchup in `matchups`.
+
+	matchups: [{"id", "week", "h_id", "a_id", "h_score", "a_score"}]; id is None
+	on a full-mode dry run for matchups not yet in the DB. Teams with no matchup
+	that week (playoff byes) are skipped; their rosters stay in the raw archive.
+	Existing rows keep their player_name/position; everything else is updated.
+	"""
+	by_week = defaultdict(list)
+	for m in matchups:
+		if weeks is None or m["week"] in weeks:
+			by_week[m["week"]].append(m)
+	internal_to_espn = {v: k for k, v in season_map.items()}
+
+	# --- gather everything first; nothing is written until every week parses ---
+	rows = []
+	per_week = {}
+	bye_sides = defaultdict(int)
 	for week in sorted(by_week.keys()):
 		data = fetch_league(sess, season, ["mBoxscore", "mMatchupScore"], scoring_period=week)
-		schedule = data.get("schedule", [])
-		# index boxscore schedule items by (home_espn, away_espn) for this week
 		box_index = {}
-		for item in schedule:
+		for item in data.get("schedule", []):
 			if item.get("matchupPeriodId") != week:
 				continue
-			box_index[(item.get("home", {}).get("teamId"),
-			           item.get("away", {}).get("teamId"))] = item
+			if not item.get("home") or not item.get("away"):
+				bye_sides[week] += 1
+				continue
+			box_index[(item["home"].get("teamId"), item["away"].get("teamId"))] = item
 
-		week_rows = 0
-		# invert season_map to find espn ids for a given internal matchup
-		internal_to_espn = {v: k for k, v in season_map.items()}
+		counts = {"starters": 0, "bench": 0, "ir": 0, "no_stats": 0}
 		for m in by_week[week]:
-			h_espn = internal_to_espn.get(m["h_id"])
-			a_espn = internal_to_espn.get(m["a_id"])
-			item = box_index.get((h_espn, a_espn))
+			item = box_index.get((internal_to_espn.get(m["h_id"]), internal_to_espn.get(m["a_id"])))
 			if item is None:
 				warnings.append(f"box wk{week}: no boxscore item for internal {m['h_id']} vs {m['a_id']}; skipped.")
 				continue
-			matchup_id = id_map.get((week, m["h_id"], m["a_id"]))  # None on dry run
 
-			for side, internal_id in (("home", m["h_id"]), ("away", m["a_id"])):
-				roster = (item.get(side, {}).get("rosterForCurrentScoringPeriod", {}) or {}).get("entries", [])
-				starters = []
+			for side, internal_id, score in (("home", m["h_id"], m["h_score"]), ("away", m["a_id"], m["a_score"])):
+				side_obj = item.get(side, {}) or {}
+				roster = (side_obj.get("rosterForCurrentScoringPeriod", {}) or {}).get("entries", [])
+				n_starters = 0
+				starter_sum = Decimal("0")
 				for e in roster:
 					slot = e.get("lineupSlotId")
-					if slot in BENCH_SLOTS:
-						continue
+					if slot not in SLOT_LABEL:
+						sys.exit(f"ERROR: unknown lineupSlotId {slot!r} (season {season} wk{week} team {internal_id}). Nothing written.")
 					pid = e.get("playerId")
 					ppe = e.get("playerPoolEntry", {}) or {}
 					pobj = ppe.get("player", {}) or {}
 					name, pos = resolve_name_pos(players, pid, pobj)
 					pts = actual_points(pobj, week)
+					has_stats = pts is not None
 					if pts is None:
 						pts = ppe.get("appliedStatTotal")
+					if pts is None:
+						warnings.append(f"box wk{week} team {internal_id}: no points at all for playerId {pid}; stored 0.")
+						pts = 0
 					if name is None:
 						warnings.append(f"box wk{week} team {internal_id}: no name for playerId {pid}; skipped row.")
 						continue
-					starters.append({
-						"espn_player_id": pid,
-						"player_name": name,
-						"position": pos,
-						"lineup_slot": SLOT_LABEL.get(slot, str(slot)),
-						"points": pts,
+					is_starter = slot not in BENCH_SLOTS
+					if is_starter:
+						n_starters += 1
+						starter_sum += dec(pts)
+						counts["starters"] += 1
+					elif slot == 21:
+						counts["ir"] += 1
+					else:
+						counts["bench"] += 1
+					if not has_stats:
+						counts["no_stats"] += 1
+					rows.append({
+						"matchup_id": m["id"], "team_id": internal_id, "week": week,
+						"espn_player_id": pid, "player_name": name, "position": pos,
+						"lineup_slot": slot, "is_starter": is_starter,
+						"points": dec(pts), "projected": dec(stat_total(pobj, week, 1)),
+						"has_stats": has_stats,
 					})
 
-				if len(starters) != EXPECTED_STARTERS:
-					warnings.append(f"box wk{week} team {internal_id}: {len(starters)} starters "
-					                f"(expected {EXPECTED_STARTERS}) — check lineupSlotId data.")
+				if n_starters != EXPECTED_STARTERS:
+					warnings.append(f"box wk{week} team {internal_id}: {n_starters} starters "
+					                f"(expected {EXPECTED_STARTERS}) — empty lineup slot(s).")
+				espn_total = (side_obj.get("pointsByScoringPeriod") or {}).get(str(week))
+				if espn_total is not None and abs(starter_sum - dec(espn_total)) > Decimal("0.005"):
+					warnings.append(f"box wk{week} team {internal_id}: starter sum {starter_sum} != ESPN {espn_total}.")
+				if score is not None and abs(starter_sum - dec(score)) > Decimal("0.005"):
+					warnings.append(f"box wk{week} team {internal_id}: starter sum {starter_sum} != matchup score {score}.")
 
-				for s in starters:
-					week_rows += 1
-					if dry_run:
-						continue
-					row = await conn.fetchrow("""
-						INSERT INTO box_scores (matchup_id, team_id, season, week, espn_player_id,
-						                        player_name, nfl_team, position, lineup_slot,
-						                        is_starter, points_scored, projected_points)
-						VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, TRUE, $9, NULL)
-						ON CONFLICT (matchup_id, team_id, espn_player_id, week)
-						DO UPDATE SET points_scored = EXCLUDED.points_scored,
-						              projected_points = EXCLUDED.projected_points,
-						              is_starter = EXCLUDED.is_starter,
-						              lineup_slot = EXCLUDED.lineup_slot,
-						              position = EXCLUDED.position,
-						              player_name = EXCLUDED.player_name
-						RETURNING (xmax = 0) AS inserted
-					""", matchup_id, internal_id, dec(season), week, s["espn_player_id"],
-					     s["player_name"], s["position"], s["lineup_slot"], dec(s["points"]))
-					if row["inserted"]:
-						ins += 1
-					else:
-						upd += 1
+		per_week[week] = counts
+		print(f"[box_scores] wk{week}: {counts['starters']} starters, {counts['bench']} bench, "
+		      f"{counts['ir']} IR ({counts['no_stats']} without a stat line); "
+		      f"{bye_sides[week]} bye side(s) skipped" + (" (dry)" if dry_run else ""))
 
-		per_week_rows[week] = week_rows
-		print(f"[box_scores] wk{week}: {week_rows} starter rows"
-		      + ("" if not dry_run else " (dry)"))
+	# --- compare against what is already stored ---
+	existing = {}
+	for r in await conn.fetch("""
+		SELECT matchup_id, team_id, espn_player_id, week, player_name, position, points_scored, is_starter
+		FROM box_scores WHERE season = $1
+	""", dec(season)):
+		if weeks is None or r["week"] in weeks:
+			existing[(r["matchup_id"], r["team_id"], r["espn_player_id"], r["week"])] = r
+	existing_sides = {(k[0], k[1]) for k in existing}  # team-games that already had rows
+	diffs = {"points": [], "name": [], "position": [], "starter_now_bench": [], "new_starter_rows": []}
+	seen = set()
+	for r in rows:
+		key = (r["matchup_id"], r["team_id"], r["espn_player_id"], r["week"])
+		old = existing.get(key)
+		if old is None:
+			if r["is_starter"] and (r["matchup_id"], r["team_id"]) in existing_sides:
+				diffs["new_starter_rows"].append(
+					f"wk{r['week']} team {r['team_id']} pid {r['espn_player_id']} {r['player_name']!r} "
+					f"{r['position']} slot {SLOT_LABEL[r['lineup_slot']]} pts {r['points']} has_stats={r['has_stats']}")
+			continue
+		seen.add(key)
+		tag = f"wk{r['week']} team {r['team_id']} pid {r['espn_player_id']} {old['player_name']!r}"
+		if old["points_scored"] != r["points"]:
+			diffs["points"].append(f"{tag}: {old['points_scored']} -> {r['points']}")
+		if old["player_name"] != r["player_name"]:
+			diffs["name"].append(f"{tag}: kept {old['player_name']!r} (ESPN now {r['player_name']!r})")
+		if old["position"] != r["position"]:
+			diffs["position"].append(f"{tag}: kept {old['position']!r} (ESPN now {r['position']!r})")
+		if old["is_starter"] and not r["is_starter"]:
+			diffs["starter_now_bench"].append(f"{tag}: stored as starter, ESPN slot {SLOT_LABEL[r['lineup_slot']]}")
+	not_returned = [f"wk{k[3]} team {k[1]} pid {k[2]} {v['player_name']!r}"
+	                for k, v in sorted(existing.items(), key=lambda kv: (kv[0][3], kv[0][1], kv[0][2]))
+	                if k not in seen]
 
-	summary["box_scores"] = {"inserted": ins, "updated": upd, "per_week": per_week_rows}
+	# --- write ---
+	ins = upd = 0
+	if not dry_run:
+		async with conn.transaction():
+			for r in rows:
+				res = await conn.fetchrow("""
+					INSERT INTO box_scores (matchup_id, team_id, season, week, espn_player_id,
+					                        player_name, nfl_team, position, lineup_slot,
+					                        is_starter, points_scored, projected_points, has_stats)
+					VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12)
+					ON CONFLICT (matchup_id, team_id, espn_player_id, week)
+					DO UPDATE SET points_scored = EXCLUDED.points_scored,
+					              projected_points = EXCLUDED.projected_points,
+					              is_starter = EXCLUDED.is_starter,
+					              lineup_slot = EXCLUDED.lineup_slot,
+					              has_stats = EXCLUDED.has_stats
+					RETURNING (xmax = 0) AS inserted
+				""", r["matchup_id"], r["team_id"], dec(season), r["week"], r["espn_player_id"],
+				     r["player_name"], r["position"], r["lineup_slot"], r["is_starter"],
+				     r["points"], r["projected"], r["has_stats"])
+				if res["inserted"]:
+					ins += 1
+				else:
+					upd += 1
+
+	summary["box_scores"] = {
+		"rows_seen": len(rows), "inserted": ins, "updated": upd, "per_week": per_week,
+		"bye_sides_skipped": dict(bye_sides),
+		"existing_rows_matched": len(seen), "existing_rows_not_returned": len(not_returned),
+		"diff_counts": {k: len(v) for k, v in diffs.items()},
+	}
+	for label, items in list(diffs.items()) + [("existing rows ESPN did not return", not_returned)]:
+		if items:
+			print(f"\n[box_scores] {label} ({len(items)}):")
+			for s in items:
+				print("    " + s)
 
 
 # --------------------------------------------------------------------------- #
@@ -400,24 +516,38 @@ async def do_draft(conn, sess, season, season_map, players, dry_run, summary, wa
 # --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
-async def run(season, dry_run):
+async def run(season, dry_run, weeks=None, box_scores_only=False):
 	sess = espn_session()
 	conn = await asyncpg.connect(os.getenv("DATABASE_URL"), ssl=False)
 	summary = {}
 	warnings = []
 	try:
 		mode = "DRY RUN (no DB writes)" if dry_run else "LIVE"
-		print(f"=== ESPN import season {season} — {mode} ===")
+		scope = " — box_scores only" if box_scores_only else ""
+		wk = f" — weeks {sorted(weeks)}" if weeks else ""
+		print(f"=== ESPN import season {season} — {mode}{scope}{wk} ===")
 
-		season_map = await do_team_map(conn, sess, season, dry_run, summary, warnings)
-		players = fetch_players(sess, season)
-		print(f"[players] loaded {len(players)} player names.")
+		if box_scores_only:
+			# Historical re-import: team map and matchups come from the DB and are not touched.
+			season_map = await load_team_map(conn, season)
+			players = fetch_players(sess, season)
+			print(f"[players] loaded {len(players)} player names.")
+			matchups = await load_matchups(conn, season)
+			await do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
+			                    dry_run, summary, warnings)
+		else:
+			season_map = await do_team_map(conn, sess, season, dry_run, summary, warnings)
+			players = fetch_players(sess, season)
+			print(f"[players] loaded {len(players)} player names.")
 
-		decided, id_map, completed_weeks = await do_matchups(
-			conn, sess, season, season_map, dry_run, summary, warnings)
-		await do_box_scores(conn, sess, season, season_map, decided, id_map,
-		                    players, dry_run, summary, warnings)
-		await do_draft(conn, sess, season, season_map, players, dry_run, summary, warnings)
+			decided, id_map, completed_weeks = await do_matchups(
+				conn, sess, season, season_map, dry_run, summary, warnings)
+			matchups = [{"id": id_map.get((m["week"], m["h_id"], m["a_id"])),  # None on dry run
+			             "week": m["week"], "h_id": m["h_id"], "a_id": m["a_id"],
+			             "h_score": m["h_score"], "a_score": m["a_score"]} for m in decided]
+			await do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
+			                    dry_run, summary, warnings)
+			await do_draft(conn, sess, season, season_map, players, dry_run, summary, warnings)
 	finally:
 		await conn.close()
 
@@ -437,8 +567,12 @@ def main():
 	ap = argparse.ArgumentParser(description="Import an in-progress ESPN season into Rockwood.")
 	ap.add_argument("--season", type=int, required=True, help="season year, e.g. 2026")
 	ap.add_argument("--dry-run", action="store_true", help="fetch and report without writing to the DB")
+	ap.add_argument("--weeks", help="limit box_scores to these weeks, e.g. 1-13 or 14,15,16")
+	ap.add_argument("--box-scores-only", action="store_true",
+	                help="re-import box_scores only, using espn_team_map and matchups already in the DB")
 	args = ap.parse_args()
-	asyncio.run(run(args.season, args.dry_run))
+	weeks = parse_weeks(args.weeks) if args.weeks else None
+	asyncio.run(run(args.season, args.dry_run, weeks, args.box_scores_only))
 
 
 if __name__ == "__main__":

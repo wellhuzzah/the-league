@@ -152,7 +152,7 @@ async def get_season_luck(year: int):
 
 @router.get("/{year}/top-scorer")
 async def get_season_top_scorer(year: int):
-    """Highest-scoring individual player (starters only) for the season."""
+    """Highest-scoring individual player (starters only, regular season) for the season."""
     async with (await get_pool()).acquire() as db:
         row = await db.fetchrow("""
             SELECT
@@ -162,8 +162,10 @@ async def get_season_top_scorer(year: int):
                 SUM(bs.points_scored) AS total_points
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
+            JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.season = $1
               AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
             GROUP BY bs.player_name, bs.position, t.owner
             ORDER BY total_points DESC
             LIMIT 1

@@ -32,6 +32,7 @@ async def get_top_performances(limit: int = 25, position: str = None):
                     ELSE m.home_team_id
                 END
                 WHERE bs.position = $2
+                  AND bs.is_starter = TRUE
                 ORDER BY bs.points_scored DESC
                 LIMIT $1
             """, limit, position)
@@ -55,6 +56,7 @@ async def get_top_performances(limit: int = 25, position: str = None):
                     WHEN m.home_team_id = bs.team_id THEN m.away_team_id
                     ELSE m.home_team_id
                 END
+                WHERE bs.is_starter = TRUE
                 ORDER BY bs.points_scored DESC
                 LIMIT $1
             """, limit)
@@ -66,19 +68,22 @@ async def get_top_performances(limit: int = 25, position: str = None):
 
 @router.get("/position-breakdown")
 async def get_position_breakdown():
-    """Average points scored by position per season across all teams."""
+    """Average points scored by position per season across all teams (starters, regular season)."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
-                season,
-                position,
-                ROUND(AVG(points_scored)::numeric, 2)   AS avg_points,
-                ROUND(MAX(points_scored)::numeric, 2)   AS max_points,
-                COUNT(*)                                AS total_games
-            FROM box_scores
-            WHERE position != 'UNK'
-            GROUP BY season, position
-            ORDER BY season, position
+                bs.season,
+                bs.position,
+                ROUND(AVG(bs.points_scored)::numeric, 2)   AS avg_points,
+                ROUND(MAX(bs.points_scored)::numeric, 2)   AS max_points,
+                COUNT(*)                                   AS total_games
+            FROM box_scores bs
+            JOIN matchups m ON bs.matchup_id = m.id
+            WHERE bs.position != 'UNK'
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
+            GROUP BY bs.season, bs.position
+            ORDER BY bs.season, bs.position
         """)
         seasons = {}
         for row in rows:
@@ -95,8 +100,8 @@ async def get_position_breakdown():
 
 
 @router.get("/team/{team_id}")
-async def get_team_boxscores(team_id: int, season: int = None):
-    """All box score entries for a team, optionally filtered by season."""
+async def get_team_boxscores(team_id: int, season: int = None, include_bench: bool = False):
+    """All box score entries for a team, optionally filtered by season. Starters only unless include_bench."""
     async with (await get_pool()).acquire() as db:
         team = await db.fetchrow("SELECT owner FROM teams WHERE team_id = $1", team_id)
         if not team:
@@ -115,8 +120,9 @@ async def get_team_boxscores(team_id: int, season: int = None):
                 FROM box_scores bs
                 JOIN matchups m ON bs.matchup_id = m.id
                 WHERE bs.team_id = $1 AND bs.season = $2
+                  AND (bs.is_starter = TRUE OR $3)
                 ORDER BY bs.week, bs.points_scored DESC
-            """, team_id, season)
+            """, team_id, season, include_bench)
         else:
             rows = await db.fetch("""
                 SELECT
@@ -130,8 +136,9 @@ async def get_team_boxscores(team_id: int, season: int = None):
                 FROM box_scores bs
                 JOIN matchups m ON bs.matchup_id = m.id
                 WHERE bs.team_id = $1
+                  AND (bs.is_starter = TRUE OR $2)
                 ORDER BY bs.season, bs.week, bs.points_scored DESC
-            """, team_id)
+            """, team_id, include_bench)
 
         return {
             "team_id": team_id,
@@ -164,6 +171,7 @@ async def get_team_best_weeks(team_id: int, limit: int = 10):
                 ELSE m.home_team_id
             END
             WHERE bs.team_id = $1
+              AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC
             LIMIT $2
         """, team_id, limit)
@@ -175,7 +183,7 @@ async def get_team_best_weeks(team_id: int, limit: int = 10):
 
 @router.get("/team/{team_id}/position-totals")
 async def get_team_position_totals(team_id: int):
-    """Points scored by position per season for a team."""
+    """Points scored by position per season for a team (starters, regular season)."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -185,7 +193,10 @@ async def get_team_position_totals(team_id: int):
                 ROUND(AVG(bs.points_scored)::numeric, 2)  AS avg_points,
                 COUNT(*)                                   AS appearances
             FROM box_scores bs
+            JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.team_id = $1 AND bs.position != 'UNK'
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
             GROUP BY bs.season, bs.position
             ORDER BY bs.season, total_points DESC
         """, team_id)
@@ -223,6 +234,7 @@ async def get_player_history(player_name: str):
             JOIN teams t ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.player_name ILIKE $1
+              AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC
         """, f"%{player_name}%")
 
@@ -249,8 +261,8 @@ async def get_player_history(player_name: str):
 
 
 @router.get("/week/{season}/{week}")
-async def get_week_boxscores(season: int, week: int):
-    """All player scores for every team in a given week."""
+async def get_week_boxscores(season: int, week: int, include_bench: bool = False):
+    """All player scores for every team in a given week. Starters only unless include_bench."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -263,8 +275,9 @@ async def get_week_boxscores(season: int, week: int):
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
             WHERE bs.season = $1 AND bs.week = $2
+              AND (bs.is_starter = TRUE OR $3)
             ORDER BY t.owner, bs.points_scored DESC
-        """, season, week)
+        """, season, week, include_bench)
 
         if not rows:
             raise HTTPException(status_code=404, detail="No box score data for this week")
@@ -308,6 +321,7 @@ async def get_random_player():
                 ROUND(SUM(points_scored)::numeric, 1)          AS total_points
             FROM box_scores
             WHERE position != 'UNK'
+              AND is_starter = TRUE
             GROUP BY player_name, position
             HAVING COUNT(*) >= 5
             ORDER BY RANDOM()
@@ -337,6 +351,7 @@ async def get_random_player():
                 ELSE m.home_team_id
             END
             WHERE bs.player_name = $1
+              AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC
             LIMIT 1
         """, name)
@@ -347,6 +362,7 @@ async def get_random_player():
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
             WHERE bs.player_name = $1
+              AND bs.is_starter = TRUE
             GROUP BY t.owner, t.team_id
             ORDER BY appearances DESC
             LIMIT 1
@@ -368,6 +384,7 @@ async def get_random_player():
             SELECT DISTINCT season
             FROM box_scores
             WHERE player_name = $1
+              AND is_starter = TRUE
             ORDER BY season
         """, name)
 
@@ -419,12 +436,15 @@ async def get_position_summary(position: str):
         scoring = await db.fetchrow("""
             SELECT
                 COUNT(*)                                        AS total_appearances,
-                ROUND(AVG(points_scored)::numeric, 2)          AS avg_points,
-                ROUND(MAX(points_scored)::numeric, 2)          AS max_points,
-                ROUND(MIN(points_scored)::numeric, 2)          AS min_points,
-                ROUND(STDDEV(points_scored)::numeric, 2)       AS stddev_points
-            FROM box_scores
-            WHERE position = $1
+                ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
+                ROUND(MAX(bs.points_scored)::numeric, 2)       AS max_points,
+                ROUND(MIN(bs.points_scored)::numeric, 2)       AS min_points,
+                ROUND(STDDEV(bs.points_scored)::numeric, 2)    AS stddev_points
+            FROM box_scores bs
+            JOIN matchups m ON bs.matchup_id = m.id
+            WHERE bs.position = $1
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
         """, pos)
 
         # Top 10 single-game performances
@@ -446,6 +466,8 @@ async def get_position_summary(position: str):
                 ELSE m.home_team_id
             END
             WHERE bs.position = $1
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
             ORDER BY bs.points_scored DESC
             LIMIT 10
         """, pos)
@@ -464,6 +486,8 @@ async def get_position_summary(position: str):
             JOIN teams t   ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
             ORDER BY bs.points_scored ASC
             LIMIT 5
         """, pos)
@@ -477,7 +501,10 @@ async def get_position_summary(position: str):
                 ROUND(SUM(bs.points_scored)::numeric, 1)       AS total_points,
                 ROUND(MAX(bs.points_scored)::numeric, 2)       AS best_game
             FROM box_scores bs
+            JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
             GROUP BY bs.player_name
             ORDER BY appearances DESC
             LIMIT 10
@@ -486,14 +513,17 @@ async def get_position_summary(position: str):
         # Avg points by season (trend over time)
         by_season = await db.fetch("""
             SELECT
-                season,
-                ROUND(AVG(points_scored)::numeric, 2)          AS avg_points,
-                ROUND(MAX(points_scored)::numeric, 2)          AS max_points,
-                COUNT(DISTINCT player_name)                    AS unique_players
-            FROM box_scores
-            WHERE position = $1
-            GROUP BY season
-            ORDER BY season
+                bs.season,
+                ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
+                ROUND(MAX(bs.points_scored)::numeric, 2)       AS max_points,
+                COUNT(DISTINCT bs.player_name)                 AS unique_players
+            FROM box_scores bs
+            JOIN matchups m ON bs.matchup_id = m.id
+            WHERE bs.position = $1
+              AND bs.is_starter = TRUE
+              AND NOT m.is_playoffs
+            GROUP BY bs.season
+            ORDER BY bs.season
         """, pos)
 
         # Draft stats for this position

@@ -5,5 +5,9 @@ __pycache__/
 .claude/
 /*.py
 !/espn_import.py
+!/espn_raw.py
+!/espn_transactions_import.py
 *.md
 *.sql
+/espn_raw/
+/backups/
