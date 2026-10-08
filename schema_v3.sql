@@ -24,28 +24,40 @@ ALTER TABLE box_scores ADD CONSTRAINT box_scores_starter_from_slot
 	CHECK (is_starter = (lineup_slot NOT IN (20, 21)));
 
 -- ===========================================================================
--- 2. transactions   (PENDING — not applied yet)
+-- 2. transactions + transaction_items   (PENDING — not applied yet)
 -- ===========================================================================
--- CREATE TABLE transactions (
--- 	id                  SERIAL PRIMARY KEY,
--- 	espn_txn_id         UUID NOT NULL UNIQUE,
--- 	espn_related_txn_id UUID,
--- 	season              NUMERIC(4,0) NOT NULL,
--- 	week                INTEGER NOT NULL,
--- 	team_id             INTEGER NOT NULL REFERENCES teams(team_id),
--- 	type                VARCHAR(16) NOT NULL,
--- 	status              VARCHAR(48) NOT NULL,
--- 	bid_amount          INTEGER,
--- 	proposed_at         TIMESTAMPTZ NOT NULL,
--- 	processed_at        TIMESTAMPTZ,
--- 	add_player_id       INTEGER,
--- 	add_player_name     VARCHAR,
--- 	add_position        VARCHAR,
--- 	drop_player_id      INTEGER,
--- 	drop_player_name    VARCHAR,
--- 	drop_position       VARCHAR,
--- 	CHECK (add_player_id IS NOT NULL OR drop_player_id IS NOT NULL)
--- );
--- CREATE INDEX idx_transactions_season_week ON transactions (season, week);
--- CREATE INDEX idx_transactions_team        ON transactions (team_id);
--- CREATE INDEX idx_transactions_add_player  ON transactions (add_player_id);
+-- One row per ESPN transaction (WAIVER, FREEAGENT, or ROSTER with a DROP), and
+-- one row per player moved in it. Loaded by espn_transactions_import.py.
+-- Event time: COALESCE(processed_at, proposed_at). processDate exists only on
+-- waiver rows; both dates are stored exactly as ESPN gives them (2018 rounds
+-- processDate to the hour, so it can be earlier than proposedDate).
+CREATE TABLE transactions (
+	id                  SERIAL PRIMARY KEY,
+	espn_txn_id         UUID NOT NULL UNIQUE,
+	espn_related_txn_id UUID,                  -- relatedTransactionId as given by ESPN
+	cancel_twin_of      UUID,                  -- set on a system CANCEL row that duplicates a failed
+	                                           -- claim (2018: matched on items); = that claim's espn_txn_id
+	season              NUMERIC(4,0) NOT NULL,
+	week                INTEGER NOT NULL,      -- the transaction's scoringPeriodId
+	team_id             INTEGER NOT NULL REFERENCES teams(team_id),  -- from the items, not top-level teamId
+	type                VARCHAR(16) NOT NULL,  -- WAIVER / FREEAGENT / ROSTER
+	status              VARCHAR(48) NOT NULL,  -- EXECUTED, CANCELED, FAILED_* (open list)
+	bid_amount          INTEGER,
+	proposed_at         TIMESTAMPTZ NOT NULL,
+	processed_at        TIMESTAMPTZ
+);
+CREATE INDEX idx_transactions_season_week ON transactions (season, week);
+CREATE INDEX idx_transactions_team        ON transactions (team_id);
+
+CREATE TABLE transaction_items (
+	id               SERIAL PRIMARY KEY,
+	transaction_id   INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+	item_type        VARCHAR(4) NOT NULL CHECK (item_type IN ('ADD', 'DROP')),
+	espn_player_id   INTEGER NOT NULL,        -- negative = D/ST
+	player_name      VARCHAR,                 -- NULL if ESPN's player list had no name
+	position         VARCHAR,
+	from_team_id     INTEGER REFERENCES teams(team_id),  -- NULL = free agent pool (ESPN 0 / -1)
+	to_team_id       INTEGER REFERENCES teams(team_id),  -- NULL = free agent pool
+	UNIQUE (transaction_id, item_type, espn_player_id)
+);
+CREATE INDEX idx_transaction_items_player ON transaction_items (espn_player_id);
