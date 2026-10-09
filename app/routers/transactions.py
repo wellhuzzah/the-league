@@ -407,7 +407,8 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 
 @router.get("/records/most-contested")
 async def get_most_contested(limit: int = 25, season: int = None):
-	"""Players claimed by the most distinct teams in a single waiver run (cancelled claims excluded)."""
+	"""Players claimed by the most distinct teams in a single waiver run. Counts the winning claim and
+	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out."""
 	async with (await get_pool()).acquire() as db:
 		rows = await db.fetch(f"""
 			WITH claims AS (
@@ -416,7 +417,7 @@ async def get_most_contested(limit: int = 25, season: int = None):
 				FROM transactions t
 				JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
 				JOIN teams tm            ON tm.team_id = t.team_id
-				WHERE t.type = 'WAIVER' AND t.status <> 'CANCELED'
+				WHERE t.type = 'WAIVER' AND t.status IN ('EXECUTED', 'FAILED_INVALIDPLAYERSOURCE')
 				  AND t.season = ANY($2::numeric[])
 				  AND ($3::numeric IS NULL OR t.season = $3)
 			)
