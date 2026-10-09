@@ -11,7 +11,9 @@ __pycache__/
 !/weekly_maintenance.py
 /weekly_maintenance.log
 /maintenance_output/
+/weekly_maintenance.last_success
 *.md
+!/docs/weekly_maintenance_runbook.md
 *.sql
 !/schema_v3.sql
 /espn_raw/

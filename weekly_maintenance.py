@@ -19,8 +19,23 @@ kept in maintenance_output/ (gitignored) for when a guardrail trips.
 
 Exit code: 0 if every step passed or was skipped; otherwise the sum of 1 (feed), 2 (scores),
 4 (waivers) for the steps that failed.
+
+Notifications (optional, set in .env; nothing is sent when unset):
+	NOTIFY_WEBHOOK_URL  Discord or Slack incoming webhook (or an ntfy topic URL). Posted when a
+	                    step fails, or when the last fully successful run is over STALE_DAYS old.
+	HEALTHCHECK_URL     healthchecks.io-style ping URL: pinged on success, URL + "/fail" on
+	                    failure. Its own schedule alerts you if the task stops running at all.
+	Message text is this run's log lines with every .env value replaced by [redacted].
+weekly_maintenance.last_success (gitignored) holds the time of the last fully successful run.
+
+Manual override, interactive use only (see docs/weekly_maintenance_runbook.md):
+	python weekly_maintenance.py --accept-diffs scores [--accept-diffs waivers]
+A tripped guardrail for that step is shown and needs "ACCEPT" typed at the console; without a
+console (Task Scheduler) the override is refused. Unreadable dry runs and ESPN errors can never be
+overridden.
 """
 
+import argparse
 import asyncio
 import glob
 import json
@@ -32,7 +47,8 @@ import sys
 from datetime import date, datetime, timezone
 
 import asyncpg
-from dotenv import load_dotenv
+import requests
+from dotenv import dotenv_values, load_dotenv
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(HERE, ".env"))
@@ -51,6 +67,10 @@ ROWS_TOLERANCE = 0.15          # new week's box_scores rows vs the median stored
 MAX_POINT_CORRECTIONS = 40     # stat corrections allowed, and only in the latest stored week
 MAX_NEW_TRANSACTIONS = 150     # busiest week on record is 47
 
+LAST_SUCCESS = os.path.join(HERE, "weekly_maintenance.last_success")
+STALE_DAYS = 8                 # weekly task: more than this since a clean run means it stopped
+RUN_LINES = []                 # this run's log lines, for the notification
+
 
 def current_season(today):
 	return today.year if today.month >= 8 else today.year - 1
@@ -66,7 +86,44 @@ def log(step, status, detail):
 	line = f"{stamp} {step:<7} {status:<5} {detail}"
 	with open(LOG, "a", encoding="ascii", errors="replace") as f:
 		f.write(line + "\n")
+	RUN_LINES.append(line)
 	print(line)
+
+
+def interactive_console():
+	"""True only for a real console. On Windows isatty() is also True for NUL, which is what a
+	scheduled task can get as stdin, so ask Windows for the console mode as well."""
+	if sys.stdin is None or not sys.stdin.isatty():
+		return False
+	if os.name != "nt":
+		return True
+	import ctypes
+	import msvcrt
+	mode = ctypes.c_uint32()
+	handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+	return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+
+
+def guardrail_tripped(step, problems, accept):
+	"""True if the step must stop. An interactive operator can accept the problems for this run."""
+	if not problems:
+		return False
+	if step in accept:
+		if not interactive_console():
+			print(f"--accept-diffs {step} refused: no interactive console")
+		else:
+			print(f"\n{step} guardrails tripped:")
+			for p in problems:
+				print("   - " + p)
+			try:
+				answer = input(f"Type ACCEPT to run the live {step} import anyway: ").strip()
+			except EOFError:
+				answer = ""
+			if answer == "ACCEPT":
+				log(step, "warn", "guardrail overridden by operator: " + "; ".join(problems))
+				return False
+	log(step, "FAIL", "guardrail: " + "; ".join(problems) + "; nothing written")
+	return True
 
 
 def run(step, label, args, timeout=1800):
@@ -123,7 +180,7 @@ def step_feed(season, today):
 	return False
 
 
-def step_scores(season):
+def step_scores(season, accept):
 	teams = query("SELECT COUNT(*) n FROM espn_team_map WHERE season = $1", season)[0]["n"]
 	stored = {r["week"]: r for r in query("""
 		SELECT m.week, COUNT(DISTINCT m.id) matchups, COUNT(b.id) box_rows
@@ -188,8 +245,7 @@ def step_scores(season):
 			problems.append(f"{diffs['points']} point changes in weeks {sorted(corrected)} (only the latest stored week may change)")
 	if drafted and summary.get("draft_picks", {}).get("count_seen") != drafted:
 		problems.append(f"draft: ESPN {summary.get('draft_picks', {}).get('count_seen')} picks, stored {drafted}")
-	if problems:
-		log("scores", "FAIL", "guardrail: " + "; ".join(problems) + "; nothing written")
+	if guardrail_tripped("scores", problems, accept):
 		return False
 
 	code, out = run("scores", "live", ["espn_import.py", "--season", str(season)])
@@ -210,7 +266,7 @@ def step_scores(season):
 	return True
 
 
-def step_waivers(season):
+def step_waivers(season, accept):
 	stored = query("SELECT COUNT(*) n, MAX(week) wk FROM transactions WHERE season = $1", season)[0]
 	db_rows, db_week = stored["n"], stored["wk"] or 0
 
@@ -229,26 +285,25 @@ def step_waivers(season):
 	faab = re.search(r"WAIVER only (\d+)/(\d+)", out)
 	truncation = re.search(r"^\[truncation\].*-> (\w+)", out, re.M)
 
-	problems = []
 	if None in (kept, latest, unresolved, mismatched) or not faab or not truncation:
-		problems.append("could not read the dry run checks")
-	else:
-		if kept < db_rows:
-			problems.append(f"ESPN returns {kept} rows, fewer than the {db_rows} stored")
-		if kept - db_rows > MAX_NEW_TRANSACTIONS:
-			problems.append(f"{kept - db_rows} new rows at once (limit {MAX_NEW_TRANSACTIONS})")
-		if latest < db_week:
-			problems.append(f"ESPN's latest period {latest} is before stored week {db_week}")
-		if unresolved:
-			problems.append(f"{unresolved} unresolved player ids")
-		if mismatched:
-			problems.append(f"executed waiver claims disagree with ESPN on {mismatched} date(s)")
-		if faab.group(1) != faab.group(2):
-			problems.append(f"FAAB spent matches ESPN for only {faab.group(1)}/{faab.group(2)} teams")
-		if truncation.group(1) != "OK":
-			problems.append("draft-row truncation check failed")
-	if problems:
-		log("waivers", "FAIL", "guardrail: " + "; ".join(problems) + "; nothing written")
+		log("waivers", "FAIL", "guardrail: could not read the dry run checks; nothing written")
+		return False
+	problems = []
+	if kept < db_rows:
+		problems.append(f"ESPN returns {kept} rows, fewer than the {db_rows} stored")
+	if kept - db_rows > MAX_NEW_TRANSACTIONS:
+		problems.append(f"{kept - db_rows} new rows at once (limit {MAX_NEW_TRANSACTIONS})")
+	if latest < db_week:
+		problems.append(f"ESPN's latest period {latest} is before stored week {db_week}")
+	if unresolved:
+		problems.append(f"{unresolved} unresolved player ids")
+	if mismatched:
+		problems.append(f"executed waiver claims disagree with ESPN on {mismatched} date(s)")
+	if faab.group(1) != faab.group(2):
+		problems.append(f"FAAB spent matches ESPN for only {faab.group(1)}/{faab.group(2)} teams")
+	if truncation.group(1) != "OK":
+		problems.append("draft-row truncation check failed")
+	if guardrail_tripped("waivers", problems, accept):
 		return False
 
 	code, out = run("waivers", "live", ["espn_transactions_import.py", "--season", str(season)])
@@ -263,13 +318,65 @@ def step_waivers(season):
 	return True
 
 
+# --------------------------------------------------------------------------- #
+# notification
+# --------------------------------------------------------------------------- #
+def days_since_success():
+	try:
+		with open(LAST_SUCCESS) as f:
+			last = datetime.fromisoformat(f.read().strip())
+	except (OSError, ValueError):
+		return None
+	return (datetime.now(timezone.utc) - last).total_seconds() / 86400
+
+
+def redacted(text):
+	for v in dotenv_values(os.path.join(HERE, ".env")).values():
+		if v and len(v) >= 6:
+			text = re.sub(re.escape(v.strip("{}")), "[redacted]", text, flags=re.IGNORECASE)
+	return text
+
+
+def notify(failed, stale_days):
+	ok = not failed
+	stale = stale_days is not None and stale_days > STALE_DAYS
+	head = (f"Rockwood weekly maintenance: {'ok' if ok else 'FAILED: ' + ', '.join(failed)}"
+	        + (f" (last fully successful run was {stale_days:.0f} days ago)" if stale else ""))
+	text = redacted(head + "\n" + "\n".join(RUN_LINES))[:1900]
+	sends = []
+	hc = os.getenv("HEALTHCHECK_URL")
+	if hc:
+		sends.append(("healthcheck", hc if ok else hc.rstrip("/") + "/fail", {"data": text.encode("utf-8")}))
+	hook = os.getenv("NOTIFY_WEBHOOK_URL")
+	if hook and (not ok or stale):
+		if "discord.com" in hook:
+			body = {"json": {"content": text}}
+		elif "hooks.slack.com" in hook:
+			body = {"json": {"text": text}}
+		else:    # ntfy and similar: plain text
+			body = {"data": text.encode("utf-8")}
+		sends.append(("webhook", hook, body))
+	for name, url, body in sends:
+		try:
+			requests.post(url, timeout=15, **body).raise_for_status()
+		except requests.RequestException as e:
+			# never log the URL or the exception text; the URL is itself a secret
+			log("notify", "FAIL", f"{name}: {type(e).__name__}")
+
+
 def main():
+	ap = argparse.ArgumentParser(description="Weekly ESPN upkeep (feed snapshot, score and waiver imports).")
+	ap.add_argument("--accept-diffs", action="append", default=[], choices=["scores", "waivers"],
+	                help="interactive only: allow overriding tripped guardrails for this step")
+	accept = set(ap.parse_args().accept_diffs)
+
 	today = datetime.now().date()
 	season = current_season(today)
+	stale_days = days_since_success()
 	failed = []
 	steps = [("feed", lambda: step_feed(season, today))]
 	if in_season(today, season):
-		steps += [("scores", lambda: step_scores(season)), ("waivers", lambda: step_waivers(season))]
+		steps += [("scores", lambda: step_scores(season, accept)), ("waivers", lambda: step_waivers(season, accept))]
 	else:
 		log("scores", "skip", f"off-season ({season} season)")
 		log("waivers", "skip", f"off-season ({season} season)")
@@ -281,6 +388,10 @@ def main():
 			ok = False
 		if not ok:
 			failed.append(name)
+	if not failed:
+		with open(LAST_SUCCESS, "w") as f:
+			f.write(datetime.now(timezone.utc).isoformat())
+	notify(failed, stale_days)
 	return sum(STEP_BITS[s] for s in failed)
 
 
