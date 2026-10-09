@@ -17,9 +17,9 @@ EVENT_AT = "COALESCE(t.processed_at, t.proposed_at)"
 RUN_DATE = f"({EVENT_AT} AT TIME ZONE 'UTC')::date"
 
 # The executed WAIVER claim that won claim t's added player (i) in t's run: same season,
-# same added player, same run date. Exposes w.owner, w.team_id, w.bid_amount.
+# same added player, same run date. Exposes w.owner, w.team_id, w.bid_amount, w.espn_txn_id.
 RUN_WINNER = f"""LEFT JOIN LATERAL (
-				SELECT wt.owner, wt.team_id, x.bid_amount
+				SELECT wt.owner, wt.team_id, x.bid_amount, x.espn_txn_id
 				FROM transactions x
 				JOIN transaction_items xi ON xi.transaction_id = x.id AND xi.item_type = 'ADD'
 				JOIN teams wt             ON wt.team_id = x.team_id
@@ -75,7 +75,8 @@ async def get_week_transactions(year: int, week: int):
 				tm.owner,
 				tm.team_id,
 				w.owner             AS outbid_by_owner,
-				w.bid_amount        AS outbid_by_bid
+				w.bid_amount        AS outbid_by_bid,
+				w.espn_txn_id       AS outbid_by_txn_id
 			FROM transactions t
 			JOIN teams tm ON tm.team_id = t.team_id
 			-- only outbid claims look up a winner; they always have exactly one ADD
@@ -130,7 +131,9 @@ async def get_week_transactions(year: int, week: int):
 					"owner":          row["owner"],
 					"team_id":        row["team_id"],
 					"items":          by_txn.get(row["id"], []),
-					**({"outbid_by": {"owner": row["outbid_by_owner"], "bid_amount": row["outbid_by_bid"]}}
+					**({"outbid_by": {"owner":       row["outbid_by_owner"],
+					                  "bid_amount":  row["outbid_by_bid"],
+					                  "espn_txn_id": row["outbid_by_txn_id"]}}
 					   if row["status"] == "FAILED_INVALIDPLAYERSOURCE" else {}),
 				}
 				for row in rows
