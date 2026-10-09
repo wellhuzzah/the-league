@@ -16,6 +16,21 @@ EVENT_AT = "COALESCE(t.processed_at, t.proposed_at)"
 # A waiver run = all claims processed on the same UTC date.
 RUN_DATE = f"({EVENT_AT} AT TIME ZONE 'UTC')::date"
 
+# The executed WAIVER claim that won claim t's added player (i) in t's run: same season,
+# same added player, same run date. Exposes w.owner, w.team_id, w.bid_amount.
+RUN_WINNER = f"""LEFT JOIN LATERAL (
+				SELECT wt.owner, wt.team_id, x.bid_amount
+				FROM transactions x
+				JOIN transaction_items xi ON xi.transaction_id = x.id AND xi.item_type = 'ADD'
+				JOIN teams wt             ON wt.team_id = x.team_id
+				WHERE x.type = 'WAIVER' AND x.status = 'EXECUTED'
+				  AND x.season = t.season
+				  AND xi.espn_player_id = i.espn_player_id
+				  AND (COALESCE(x.processed_at, x.proposed_at) AT TIME ZONE 'UTC')::date = {RUN_DATE}
+				ORDER BY x.bid_amount DESC, x.id
+				LIMIT 1
+			) w ON TRUE"""
+
 
 @router.get("/seasons")
 async def get_transaction_seasons():
@@ -30,7 +45,8 @@ async def get_transaction_seasons():
 				                                     AND t.status = 'EXECUTED'), 0)            AS faab_spent,
 				COUNT(*) FILTER (WHERE t.type = 'FREEAGENT' AND t.status = 'EXECUTED')         AS free_agent_moves,
 				MIN(t.week)                                                                    AS first_week,
-				MAX(t.week)                                                                    AS last_week
+				MAX(t.week)                                                                    AS last_week,
+				array_agg(DISTINCT t.week ORDER BY t.week)                                     AS weeks
 			FROM transactions t
 			GROUP BY t.season
 			ORDER BY t.season
@@ -57,9 +73,15 @@ async def get_week_transactions(year: int, week: int):
 				{EVENT_AT}          AS event_at,
 				t.cancel_twin_of,
 				tm.owner,
-				tm.team_id
+				tm.team_id,
+				w.owner             AS outbid_by_owner,
+				w.bid_amount        AS outbid_by_bid
 			FROM transactions t
 			JOIN teams tm ON tm.team_id = t.team_id
+			-- only outbid claims look up a winner; they always have exactly one ADD
+			LEFT JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
+			                             AND t.status = 'FAILED_INVALIDPLAYERSOURCE'
+			{RUN_WINNER}
 			WHERE t.season = $1 AND t.week = $2
 			ORDER BY {EVENT_AT}, t.id
 		""", year, week)
@@ -108,6 +130,8 @@ async def get_week_transactions(year: int, week: int):
 					"owner":          row["owner"],
 					"team_id":        row["team_id"],
 					"items":          by_txn.get(row["id"], []),
+					**({"outbid_by": {"owner": row["outbid_by_owner"], "bid_amount": row["outbid_by_bid"]}}
+					   if row["status"] == "FAILED_INVALIDPLAYERSOURCE" else {}),
 				}
 				for row in rows
 			]
@@ -219,7 +243,8 @@ async def get_biggest_bids(limit: int = 25, season: int = None):
 
 @router.get("/records/biggest-losing-bids")
 async def get_biggest_losing_bids(limit: int = 25, season: int = None):
-	"""Top failed WAIVER bids (any FAILED_* status, shown), with who won the player in that run."""
+	"""Top outbid (FAILED_INVALIDPLAYERSOURCE) WAIVER bids, with who won the player in that run.
+	Other failures (e.g. FAILED_PLAYERALREADYDROPPED) were not outbid and are left out."""
 	async with (await get_pool()).acquire() as db:
 		rows = await db.fetch(f"""
 			SELECT
@@ -237,19 +262,8 @@ async def get_biggest_losing_bids(limit: int = 25, season: int = None):
 			FROM transactions t
 			JOIN teams tm            ON tm.team_id = t.team_id
 			JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
-			LEFT JOIN LATERAL (
-				SELECT wt.owner, x.bid_amount
-				FROM transactions x
-				JOIN transaction_items xi ON xi.transaction_id = x.id AND xi.item_type = 'ADD'
-				JOIN teams wt             ON wt.team_id = x.team_id
-				WHERE x.type = 'WAIVER' AND x.status = 'EXECUTED'
-				  AND x.season = t.season
-				  AND xi.espn_player_id = i.espn_player_id
-				  AND (COALESCE(x.processed_at, x.proposed_at) AT TIME ZONE 'UTC')::date = {RUN_DATE}
-				ORDER BY x.bid_amount DESC, x.id
-				LIMIT 1
-			) w ON TRUE
-			WHERE t.type = 'WAIVER' AND t.status LIKE 'FAILED%'
+			{RUN_WINNER}
+			WHERE t.type = 'WAIVER' AND t.status = 'FAILED_INVALIDPLAYERSOURCE'
 			  AND t.season = ANY($2::numeric[])
 			  AND ($3::numeric IS NULL OR t.season = $3)
 			ORDER BY t.bid_amount DESC, t.season, t.week, t.espn_txn_id
