@@ -7,9 +7,67 @@ router = APIRouter(
 )
 
 
+# Seasons with matchups but no records rows are in progress: espn_import.py never writes
+# records, so they only exist for finished seasons. Their standings are computed from
+# regular-season matchups and nothing is written back.
+IN_PROGRESS_STANDINGS = """
+    WITH games AS (
+        SELECT m.home_team_id AS team_id, m.home_score AS pf, m.away_score AS pa,
+               m.winner_team_id AS winner, m.week
+        FROM matchups m WHERE m.season = $1 AND NOT m.is_playoffs
+              AND m.home_score IS NOT NULL AND m.away_score IS NOT NULL
+        UNION ALL
+        SELECT m.away_team_id, m.away_score, m.home_score, m.winner_team_id, m.week
+        FROM matchups m WHERE m.season = $1 AND NOT m.is_playoffs
+              AND m.home_score IS NOT NULL AND m.away_score IS NOT NULL
+    )
+    SELECT
+        t.team_id,
+        t.owner,
+        COUNT(*) FILTER (WHERE g.winner = g.team_id)                            AS wins,
+        COUNT(*) FILTER (WHERE g.winner IS NOT NULL AND g.winner <> g.team_id)  AS losses,
+        COUNT(*) FILTER (WHERE g.team_id IS NOT NULL AND g.winner IS NULL)      AS draws,
+        COALESCE(SUM(g.pf), 0)                                                  AS points_for,
+        COALESCE(SUM(g.pa), 0)                                                  AS points_against,
+        COUNT(g.team_id)                                                        AS games_played,
+        MAX(g.week)                                                             AS through_week
+    FROM espn_team_map etm
+    JOIN teams t ON t.team_id = etm.team_id
+    LEFT JOIN games g ON g.team_id = t.team_id
+    WHERE etm.season = $1
+    GROUP BY t.team_id, t.owner
+"""
+
+
+def rank_in_progress(rows):
+    """Current place: win% (a draw counts half), then points for, then owner name."""
+    ranked = sorted(rows, key=lambda r: (-(r["wins"] + 0.5 * r["draws"]), -float(r["points_for"]), r["owner"]))
+    through = max((r["through_week"] or 0 for r in rows), default=0)
+    return [
+        {
+            "team_id":        r["team_id"],
+            "owner":          r["owner"],
+            "wins":           r["wins"],
+            "losses":         r["losses"],
+            "draws":          r["draws"],
+            "points_for":     float(r["points_for"]),
+            "points_against": float(r["points_against"]),
+            "final_standing": place,
+            "championship":   False,
+            "sacko":          False,
+            "most_points":    False,
+            "in_progress":    True,
+            "games_played":   r["games_played"],
+            "through_week":   through,
+        }
+        for place, r in enumerate(ranked, 1)
+    ]
+
+
 @router.get("/")
 async def get_seasons():
-    """List of all seasons with champion and basic info."""
+    """List of all seasons with champion and basic info. A season with matchups but no records
+    rows is listed as in_progress, with no champion or sacko yet."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -28,15 +86,33 @@ async def get_seasons():
             GROUP BY r.season, t_champ.owner, t_sacko.owner
             ORDER BY r.season DESC
         """)
-        return [
-            {**dict(row), "highest_pf": float(row["highest_pf"] or 0)}
+        seasons = [
+            {**dict(row), "highest_pf": float(row["highest_pf"] or 0), "in_progress": False}
             for row in rows
         ]
+        finished = {int(s["season"]) for s in seasons}
+        for (year,) in await db.fetch("SELECT DISTINCT season::int FROM matchups ORDER BY 1 DESC"):
+            if year in finished:
+                continue
+            standings = await db.fetch(IN_PROGRESS_STANDINGS, year)
+            if not standings:
+                continue
+            seasons.append({
+                "season":      year,
+                "teams":       len(standings),
+                "champion":    None,
+                "sacko":       None,
+                "highest_pf":  max(float(r["points_for"]) for r in standings),
+                "in_progress": True,
+            })
+        return sorted(seasons, key=lambda s: s["season"], reverse=True)
 
 
 @router.get("/{year}/standings")
 async def get_standings(year: int):
-    """Full standings for a season."""
+    """Full standings for a season. A finished season reads records; an in-progress one (no
+    records rows) is computed from its regular-season matchups and flagged in_progress, with
+    final_standing as the current place and championship/sacko/most_points left false."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -57,12 +133,16 @@ async def get_standings(year: int):
             ORDER BY r.final_standing
         """, year)
         if not rows:
-            raise HTTPException(status_code=404, detail="Season not found")
+            live = await db.fetch(IN_PROGRESS_STANDINGS, year)
+            if not live or not any(r["games_played"] for r in live):
+                raise HTTPException(status_code=404, detail="Season not found")
+            return rank_in_progress(live)
         return [
             {
                 **dict(row),
                 "points_for":     float(row["points_for"]),
                 "points_against": float(row["points_against"]),
+                "in_progress":    False,
             }
             for row in rows
         ]
