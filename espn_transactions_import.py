@@ -36,6 +36,8 @@ from espn_import import dec, espn_session, fetch_league, fetch_players
 SEASONS = list(range(2018, 2027))
 KEEP_TYPES = {"WAIVER", "FREEAGENT", "ROSTER"}
 NO_TEAM = {0, -1}
+# A system CANCEL twin is proposed within a millisecond of its failed claim; allow a second.
+TWIN_MAX_GAP_S = 1.0
 
 # Known answers from Postman (handoff). Period = the scoringPeriodId that was queried.
 KNOWN = {
@@ -176,17 +178,22 @@ def item_key(r):
 
 def link_cancel_twins(rows, stats):
 	"""A failed claim can also appear as a system CANCEL row with no relatedTransactionId (2018).
-	Pair each such CANCEL row with a FAILED_* WAIVER row of the same week, team and ADD/DROP
-	items, one-to-one, and record the pairing on the CANCEL row (cancel_twin_of)."""
+	Pair each such CANCEL row with a FAILED_* WAIVER row of the same week, team, ADD/DROP items
+	and bid, proposed within TWIN_MAX_GAP_S of it (the closest one), one-to-one, and record the
+	pairing on the CANCEL row (cancel_twin_of). A CANCEL with the same items but a different bid
+	or time is a real user cancellation of an earlier claim, not a twin."""
 	failed = defaultdict(list)
 	for r in rows:
 		if r["type"] == "WAIVER" and r["status"].startswith("FAILED"):
 			failed[(r["week"], r["team_id"], item_key(r))].append(r)
 	for r in rows:
 		if r["type"] == "WAIVER" and r["_exec"] == "CANCEL" and not r["espn_related_txn_id"]:
-			cands = failed.get((r["week"], r["team_id"], item_key(r)))
-			if cands:
-				f = cands.pop(0)
+			cands = failed.get((r["week"], r["team_id"], item_key(r)), [])
+			gap = lambda f: abs((f["proposed_at"] - r["proposed_at"]).total_seconds())
+			f = min((f for f in cands if f["bid_amount"] == r["bid_amount"] and gap(f) <= TWIN_MAX_GAP_S),
+			        key=gap, default=None)
+			if f is not None:
+				cands.remove(f)
 				r["cancel_twin_of"] = f["espn_txn_id"]
 				stats["twins_linked"] += 1
 	stats["failed_without_twin"] = sum(len(v) for v in failed.values())
