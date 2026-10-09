@@ -57,87 +57,117 @@ async def get_transaction_seasons():
 		]
 
 
+async def _transaction_rows(db, where, *args):
+	"""Stored transactions matching `where` (SQL on alias t), in event-time order, with the players
+	moved. Outbid claims (FAILED_INVALIDPLAYERSOURCE) carry outbid_by: the run's winning claim."""
+	rows = await db.fetch(f"""
+		SELECT
+			t.id,
+			t.espn_txn_id,
+			t.week,
+			t.type,
+			t.status,
+			t.bid_amount,
+			t.proposed_at,
+			t.processed_at,
+			{EVENT_AT}          AS event_at,
+			t.cancel_twin_of,
+			tm.owner,
+			tm.team_id,
+			w.owner             AS outbid_by_owner,
+			w.bid_amount        AS outbid_by_bid,
+			w.espn_txn_id       AS outbid_by_txn_id
+		FROM transactions t
+		JOIN teams tm ON tm.team_id = t.team_id
+		-- only outbid claims look up a winner; they always have exactly one ADD
+		LEFT JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
+		                             AND t.status = 'FAILED_INVALIDPLAYERSOURCE'
+		{RUN_WINNER}
+		WHERE {where}
+		ORDER BY {EVENT_AT}, t.id
+	""", *args)
+
+	items = await db.fetch("""
+		SELECT
+			i.transaction_id,
+			i.item_type,
+			i.espn_player_id,
+			i.player_name,
+			i.position,
+			ft.owner AS from_owner,
+			tt.owner AS to_owner
+		FROM transaction_items i
+		LEFT JOIN teams ft ON ft.team_id = i.from_team_id
+		LEFT JOIN teams tt ON tt.team_id = i.to_team_id
+		WHERE i.transaction_id = ANY($1::int[])
+		ORDER BY i.transaction_id, i.item_type, i.espn_player_id
+	""", [r["id"] for r in rows])
+	by_txn = {}
+	for i in items:
+		by_txn.setdefault(i["transaction_id"], []).append({
+			"item_type":      i["item_type"],
+			"espn_player_id": i["espn_player_id"],
+			"player_name":    i["player_name"],
+			"position":       i["position"],
+			"from_owner":     i["from_owner"],
+			"to_owner":       i["to_owner"],
+		})
+
+	return [
+		{
+			"espn_txn_id":    row["espn_txn_id"],
+			"week":           row["week"],
+			"type":           row["type"],
+			"status":         row["status"],
+			"bid_amount":     row["bid_amount"],
+			"proposed_at":    row["proposed_at"],
+			"processed_at":   row["processed_at"],
+			"event_at":       row["event_at"],
+			"cancel_twin_of": row["cancel_twin_of"],
+			"owner":          row["owner"],
+			"team_id":        row["team_id"],
+			"items":          by_txn.get(row["id"], []),
+			**({"outbid_by": {"owner":       row["outbid_by_owner"],
+			                  "bid_amount":  row["outbid_by_bid"],
+			                  "espn_txn_id": row["outbid_by_txn_id"]}}
+			   if row["status"] == "FAILED_INVALIDPLAYERSOURCE" else {}),
+		}
+		for row in rows
+	]
+
+
+def _without(row, *keys):
+	return {k: v for k, v in row.items() if k not in keys}
+
+
 @router.get("/season/{year}/week/{week}")
 async def get_week_transactions(year: int, week: int):
 	"""Every stored transaction for a week, in event-time order, with the players moved."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
-			SELECT
-				t.id,
-				t.espn_txn_id,
-				t.type,
-				t.status,
-				t.bid_amount,
-				t.proposed_at,
-				t.processed_at,
-				{EVENT_AT}          AS event_at,
-				t.cancel_twin_of,
-				tm.owner,
-				tm.team_id,
-				w.owner             AS outbid_by_owner,
-				w.bid_amount        AS outbid_by_bid,
-				w.espn_txn_id       AS outbid_by_txn_id
-			FROM transactions t
-			JOIN teams tm ON tm.team_id = t.team_id
-			-- only outbid claims look up a winner; they always have exactly one ADD
-			LEFT JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
-			                             AND t.status = 'FAILED_INVALIDPLAYERSOURCE'
-			{RUN_WINNER}
-			WHERE t.season = $1 AND t.week = $2
-			ORDER BY {EVENT_AT}, t.id
-		""", year, week)
+		rows = await _transaction_rows(db, "t.season = $1 AND t.week = $2", year, week)
 		if not rows:
 			raise HTTPException(status_code=404, detail="No transactions for this week")
-
-		items = await db.fetch("""
-			SELECT
-				i.transaction_id,
-				i.item_type,
-				i.espn_player_id,
-				i.player_name,
-				i.position,
-				ft.owner AS from_owner,
-				tt.owner AS to_owner
-			FROM transaction_items i
-			LEFT JOIN teams ft ON ft.team_id = i.from_team_id
-			LEFT JOIN teams tt ON tt.team_id = i.to_team_id
-			WHERE i.transaction_id = ANY($1::int[])
-			ORDER BY i.transaction_id, i.item_type, i.espn_player_id
-		""", [r["id"] for r in rows])
-		by_txn = {}
-		for i in items:
-			by_txn.setdefault(i["transaction_id"], []).append({
-				"item_type":      i["item_type"],
-				"espn_player_id": i["espn_player_id"],
-				"player_name":    i["player_name"],
-				"position":       i["position"],
-				"from_owner":     i["from_owner"],
-				"to_owner":       i["to_owner"],
-			})
-
 		return {
-			"season": year,
-			"week":   week,
-			"transactions": [
-				{
-					"espn_txn_id":    row["espn_txn_id"],
-					"type":           row["type"],
-					"status":         row["status"],
-					"bid_amount":     row["bid_amount"],
-					"proposed_at":    row["proposed_at"],
-					"processed_at":   row["processed_at"],
-					"event_at":       row["event_at"],
-					"cancel_twin_of": row["cancel_twin_of"],
-					"owner":          row["owner"],
-					"team_id":        row["team_id"],
-					"items":          by_txn.get(row["id"], []),
-					**({"outbid_by": {"owner":       row["outbid_by_owner"],
-					                  "bid_amount":  row["outbid_by_bid"],
-					                  "espn_txn_id": row["outbid_by_txn_id"]}}
-					   if row["status"] == "FAILED_INVALIDPLAYERSOURCE" else {}),
-				}
-				for row in rows
-			]
+			"season":       year,
+			"week":         week,
+			"transactions": [_without(r, "week") for r in rows],
+		}
+
+
+@router.get("/team/{team_id}/season/{year}")
+async def get_team_season_transactions(team_id: int, year: int):
+	"""Every stored transaction a team made in a season, in event-time order, with the players moved.
+	Same rows as the week view (owner and team_id left off), each with its week."""
+	async with (await get_pool()).acquire() as db:
+		team = await db.fetchrow("SELECT owner FROM teams WHERE team_id = $1", team_id)
+		if not team:
+			raise HTTPException(status_code=404, detail="Team not found")
+		rows = await _transaction_rows(db, "t.team_id = $1 AND t.season = $2", team_id, year)
+		return {
+			"team_id":      team_id,
+			"owner":        team["owner"],
+			"season":       year,
+			"transactions": [_without(r, "owner", "team_id") for r in rows],
 		}
 
 
