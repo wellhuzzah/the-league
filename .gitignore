@@ -7,6 +7,7 @@ __pycache__/
 !/espn_import.py
 !/espn_raw.py
 !/espn_transactions_import.py
+!/activity_feed_archive.py
 *.md
 *.sql
 !/schema_v3.sql

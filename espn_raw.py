@@ -8,6 +8,9 @@ before the caller sees it. espn_raw/ is gitignored. Nothing is ever overwritten.
 The caller gets the requests.Response back unchanged and does its own
 raise_for_status() / .json() handling, so wrapping a fetch in this changes
 nothing about how the caller behaves.
+
+Reading the archive: load_archived(path) reads a saved response back. fetch_archived always
+makes a live request (then saves it); it is not a cache.
 """
 
 import gzip
