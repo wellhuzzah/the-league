@@ -88,12 +88,14 @@ async def get_draft_tendencies():
         return sorted(result, key=lambda x: x["owner"])
 
 
-@router.get("/player/{player_name}")
+@router.get("/player/{player_name:path}")
 async def search_player_draft_history(player_name: str):
     """
     Search how many times and by whom a player has been drafted.
     Case-insensitive partial match.
     """
+    if not player_name.strip():
+        raise HTTPException(status_code=404, detail="Player not found")
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT

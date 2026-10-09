@@ -215,9 +215,11 @@ async def get_team_position_totals(team_id: int):
         return list(seasons.values())
 
 
-@router.get("/player/{player_name}/history")
+@router.get("/player/{player_name:path}/history")
 async def get_player_history(player_name: str):
     """All appearances of a player across all seasons and teams. Case-insensitive partial match."""
+    if not player_name.strip():
+        raise HTTPException(status_code=404, detail="Player not found")
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -419,12 +421,14 @@ async def get_random_player():
         }
 
 
-@router.get("/position/{position}/summary")
+@router.get("/position/{position:path}/summary")
 async def get_position_summary(position: str):
     """
     Aggregate stats for a position across all seasons and owners.
     Position: QB, RB, WR, TE, K, D/ST
     """
+    if not position.strip():
+        raise HTTPException(status_code=404, detail="Position not found")
     async with (await get_pool()).acquire() as db:
 
         # Normalize position
