@@ -15,6 +15,7 @@ __pycache__/
 /weekly_maintenance.last_success
 /ddns_update.log
 /ddns_update.state
+/ddns_task.xml
 *.md
 !/docs/weekly_maintenance_runbook.md
 *.sql
