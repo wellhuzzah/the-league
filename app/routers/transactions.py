@@ -188,9 +188,27 @@ async def get_team_transactions(team_id: int):
 
 
 @router.get("/player/{player_name:path}")
-async def get_player_transactions(player_name: str):
-	"""Every executed add and drop of a player across seasons. Case-insensitive partial match."""
+async def get_player_transactions(player_name: str, exact: bool = True):
+	"""Every executed add and drop of a player across seasons.
+
+	exact=true (default): the name is matched exactly, case-insensitively, against transaction and
+	box score names and resolved to ESPN player ids; every transaction for those ids is returned,
+	whatever name ESPN used at the time. exact=false: case-insensitive partial match on the name.
+	Each row keeps the name as recorded. If a name resolves to more than one player, all are
+	returned and listed in "players"; rows carry espn_player_id to tell them apart.
+	"""
 	async with (await get_pool()).acquire() as db:
+		if exact:
+			ids = [r["espn_player_id"] for r in await db.fetch("""
+				SELECT espn_player_id FROM transaction_items WHERE lower(player_name) = lower($1)
+				UNION
+				SELECT espn_player_id FROM box_scores WHERE lower(player_name) = lower($1)
+				ORDER BY espn_player_id
+			""", player_name)]
+			match, arg = "i.espn_player_id = ANY($1::int[])", ids
+		else:
+			match, arg = "i.player_name ILIKE $1", f"%{player_name}%"
+
 		rows = await db.fetch(f"""
 			SELECT
 				t.season,
@@ -198,6 +216,7 @@ async def get_player_transactions(player_name: str):
 				{EVENT_AT}       AS event_at,
 				t.type,
 				i.item_type,
+				i.espn_player_id,
 				i.player_name,
 				i.position,
 				tm.owner,
@@ -206,13 +225,20 @@ async def get_player_transactions(player_name: str):
 			FROM transaction_items i
 			JOIN transactions t ON t.id = i.transaction_id
 			JOIN teams tm       ON tm.team_id = t.team_id
-			WHERE i.player_name ILIKE $1
+			WHERE {match}
 			  AND t.status = 'EXECUTED'
 			ORDER BY {EVENT_AT}, t.id, i.item_type
-		""", f"%{player_name}%")
+		""", arg)
+
+		names = {}
+		for r in rows:
+			names.setdefault(r["espn_player_id"], set()).add(r["player_name"])
+		player_ids = ids if exact else sorted(names)
 
 		return {
 			"query":         player_name,
+			"exact":         exact,
+			"players":       [{"espn_player_id": pid, "names": sorted(names.get(pid, ()))} for pid in player_ids],
 			"times_added":   sum(1 for r in rows if r["item_type"] == "ADD"),
 			"times_dropped": sum(1 for r in rows if r["item_type"] == "DROP"),
 			"results":       [dict(row) for row in rows],
