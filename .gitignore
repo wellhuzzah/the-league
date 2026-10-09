@@ -9,9 +9,12 @@ __pycache__/
 !/espn_transactions_import.py
 !/activity_feed_archive.py
 !/weekly_maintenance.py
+!/ddns_update.py
 /weekly_maintenance.log
 /maintenance_output/
 /weekly_maintenance.last_success
+/ddns_update.log
+/ddns_update.state
 *.md
 !/docs/weekly_maintenance_runbook.md
 *.sql
