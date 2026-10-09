@@ -8,6 +8,9 @@ __pycache__/
 !/espn_raw.py
 !/espn_transactions_import.py
 !/activity_feed_archive.py
+!/weekly_maintenance.py
+/weekly_maintenance.log
+/maintenance_output/
 *.md
 *.sql
 !/schema_v3.sql
