@@ -1,0 +1,322 @@
+$ espn_import.py --season 2026 --dry-run
+exit=0
+
+=== ESPN import season 2026 — DRY RUN (no DB writes) ===
+[espn_team_map] matched all 14 teams -> internal team_ids.
+[players] loaded 11618 player names.
+[matchups] winner values seen in schedule: ['AWAY', 'HOME', 'UNDECIDED']
+  DRY wk1 playoff=False home 2=108.8 away 8=64.1 winner=HOME(2)
+  DRY wk1 playoff=False home 13=113.4 away 10=97.7 winner=HOME(13)
+  DRY wk1 playoff=False home 7=136.1 away 4=117.0 winner=HOME(7)
+  DRY wk1 playoff=False home 12=137.6 away 6=121.3 winner=HOME(12)
+  DRY wk1 playoff=False home 5=132.0 away 3=81.2 winner=HOME(5)
+  DRY wk1 playoff=False home 1=114.3 away 11=129.2 winner=AWAY(11)
+  DRY wk1 playoff=False home 14=103.7 away 9=87.2 winner=HOME(14)
+  DRY wk2 playoff=False home 7=91.4 away 1=106.6 winner=AWAY(1)
+  DRY wk2 playoff=False home 9=119.8 away 12=126.0 winner=AWAY(12)
+  DRY wk2 playoff=False home 10=53.2 away 14=63.4 winner=AWAY(14)
+  DRY wk2 playoff=False home 8=108.1 away 13=99.5 winner=HOME(8)
+  DRY wk2 playoff=False home 5=115.4 away 11=88.8 winner=HOME(5)
+  DRY wk2 playoff=False home 3=90.1 away 2=125.8 winner=AWAY(2)
+  DRY wk2 playoff=False home 6=113.8 away 4=83.7 winner=HOME(6)
+  DRY wk3 playoff=False home 13=145.2 away 3=91.4 winner=HOME(13)
+  DRY wk3 playoff=False home 11=62.1 away 2=76.8 winner=AWAY(2)
+  DRY wk3 playoff=False home 8=100.3 away 14=97.4 winner=HOME(8)
+  DRY wk3 playoff=False home 4=89.7 away 9=106.0 winner=AWAY(9)
+  DRY wk3 playoff=False home 10=93.9 away 12=106.4 winner=AWAY(12)
+  DRY wk3 playoff=False home 5=94.2 away 1=142.5 winner=AWAY(1)
+  DRY wk3 playoff=False home 7=118.3 away 6=141.8 winner=AWAY(6)
+  DRY wk4 playoff=False home 3=99.8 away 14=116.1 winner=AWAY(14)
+  DRY wk4 playoff=False home 2=116.1 away 5=118.6 winner=AWAY(5)
+  DRY wk4 playoff=False home 13=130.6 away 11=120.4 winner=HOME(13)
+  DRY wk4 playoff=False home 1=130.2 away 6=88.8 winner=HOME(1)
+  DRY wk4 playoff=False home 9=107.6 away 7=81.3 winner=HOME(9)
+  DRY wk4 playoff=False home 4=91.6 away 10=128.8 winner=AWAY(10)
+  DRY wk4 playoff=False home 8=94.3 away 12=87.2 winner=HOME(8)
+[matchups] decided matchups: 28 across weeks [1, 2, 3, 4] (inserted 0, updated 0).
+[box_scores] wk1: 126 starters, 84 bench, 5 IR (0 without a stat line); 0 bye side(s) skipped (dry)
+[box_scores] wk2: 126 starters, 83 bench, 9 IR (0 without a stat line); 0 bye side(s) skipped (dry)
+[box_scores] wk3: 126 starters, 83 bench, 11 IR (0 without a stat line); 0 bye side(s) skipped (dry)
+[box_scores] wk4: 126 starters, 84 bench, 12 IR (1 without a stat line); 0 bye side(s) skipped (dry)
+  DRY pick 1 r1.1 team 13 'Jahmyr Gibbs' RB keeper=False
+  DRY pick 2 r1.2 team 9 "Ja'Marr Chase" WR keeper=False
+  DRY pick 3 r1.3 team 1 'Bijan Robinson' RB keeper=False
+  DRY pick 4 r1.4 team 5 'Jonathan Taylor' RB keeper=False
+  DRY pick 5 r1.5 team 12 'Christian McCaffrey' RB keeper=False
+  DRY pick 6 r1.6 team 8 'James Cook III' RB keeper=False
+  DRY pick 7 r1.7 team 2 'Amon-Ra St. Brown' WR keeper=False
+  DRY pick 8 r1.8 team 3 'Saquon Barkley' RB keeper=False
+  DRY pick 9 r1.9 team 4 "De'Von Achane" RB keeper=False
+  DRY pick 10 r1.10 team 10 'Puka Nacua' WR keeper=False
+  DRY pick 11 r1.11 team 14 'Omarion Hampton' RB keeper=False
+  DRY pick 12 r1.12 team 11 'Justin Jefferson' WR keeper=False
+  DRY pick 13 r1.13 team 7 'Jaxon Smith-Njigba' WR keeper=True
+  DRY pick 14 r1.14 team 6 'Ashton Jeanty' RB keeper=False
+  DRY pick 15 r2.1 team 6 'Derrick Henry' RB keeper=False
+  DRY pick 16 r2.2 team 7 'Jeremiyah Love' RB keeper=False
+  DRY pick 17 r2.3 team 11 'CeeDee Lamb' WR keeper=False
+  DRY pick 18 r2.4 team 14 'Malik Nabers' WR keeper=False
+  DRY pick 19 r2.5 team 10 'Nico Collins' WR keeper=False
+  DRY pick 20 r2.6 team 4 'Josh Jacobs' RB keeper=False
+  DRY pick 21 r2.7 team 3 'TreVeyon Henderson' RB keeper=False
+  DRY pick 22 r2.8 team 2 'Kyren Williams' RB keeper=False
+  DRY pick 23 r2.9 team 8 'A.J. Brown' WR keeper=False
+  DRY pick 24 r2.10 team 12 'Breece Hall' RB keeper=False
+  DRY pick 25 r2.11 team 5 'George Pickens' WR keeper=False
+  DRY pick 26 r2.12 team 1 'Tetairoa McMillan' WR keeper=False
+  DRY pick 27 r2.13 team 9 'Josh Allen' QB keeper=False
+  DRY pick 28 r2.14 team 13 'Kenneth Walker III' RB keeper=True
+  DRY pick 29 r3.1 team 13 'Drake London' WR keeper=False
+  DRY pick 30 r3.2 team 9 'Rashee Rice' WR keeper=False
+  DRY pick 31 r3.3 team 1 'Trey McBride' TE keeper=False
+  DRY pick 32 r3.4 team 5 'Zay Flowers' WR keeper=False
+  DRY pick 33 r3.5 team 12 'DeVonta Smith' WR keeper=False
+  DRY pick 34 r3.6 team 8 'Ladd McConkey' WR keeper=False
+  DRY pick 35 r3.7 team 2 'Rome Odunze' WR keeper=False
+  DRY pick 36 r3.8 team 3 'Jameson Williams' WR keeper=False
+  DRY pick 37 r3.9 team 4 'Garrett Wilson' WR keeper=False
+  DRY pick 38 r3.10 team 10 'Cam Skattebo' RB keeper=False
+  DRY pick 39 r3.11 team 14 'Tee Higgins' WR keeper=False
+  DRY pick 40 r3.12 team 11 'Bucky Irving' RB keeper=False
+  DRY pick 41 r3.13 team 7 'Carnell Tate' WR keeper=False
+  DRY pick 42 r3.14 team 6 'DJ Moore' WR keeper=False
+  DRY pick 43 r4.1 team 6 'Davante Adams' WR keeper=False
+  DRY pick 44 r4.2 team 7 'Jadarian Price' RB keeper=False
+  DRY pick 45 r4.3 team 11 'Drake Maye' QB keeper=False
+  DRY pick 46 r4.4 team 14 'Terry McLaurin' WR keeper=False
+  DRY pick 47 r4.5 team 10 "D'Andre Swift" RB keeper=False
+  DRY pick 48 r4.6 team 4 'David Montgomery' RB keeper=False
+  DRY pick 49 r4.7 team 3 'Courtland Sutton' WR keeper=False
+  DRY pick 50 r4.8 team 2 'Jalen Hurts' QB keeper=False
+  DRY pick 51 r4.9 team 8 'Jaylen Waddle' WR keeper=False
+  DRY pick 52 r4.10 team 12 'Lamar Jackson' QB keeper=False
+  DRY pick 53 r4.11 team 5 'Luther Burden III' WR keeper=False
+  DRY pick 54 r4.12 team 1 'Jordyn Tyson' WR keeper=False
+  DRY pick 55 r4.13 team 9 'Marvin Harrison Jr.' WR keeper=False
+  DRY pick 56 r4.14 team 13 'Tony Pollard' RB keeper=False
+  DRY pick 57 r5.1 team 13 'DK Metcalf' WR keeper=False
+  DRY pick 58 r5.2 team 9 'Jaylen Warren' RB keeper=False
+  DRY pick 59 r5.3 team 1 'Michael Pittman Jr.' WR keeper=False
+  DRY pick 60 r5.4 team 5 'Parker Washington' WR keeper=False
+  DRY pick 61 r5.5 team 12 'Chris Olave' WR keeper=True
+  DRY pick 62 r5.6 team 8 'Mike Evans' WR keeper=False
+  DRY pick 63 r5.7 team 2 'Sam LaPorta' TE keeper=False
+  DRY pick 64 r5.8 team 3 'Kyle Pitts Sr.' TE keeper=False
+  DRY pick 65 r5.9 team 4 'Jayden Daniels' QB keeper=False
+  DRY pick 66 r5.10 team 10 'Joe Burrow' QB keeper=False
+  DRY pick 67 r5.11 team 14 'Chase Brown' RB keeper=True
+  DRY pick 68 r5.12 team 11 'Brian Thomas Jr.' WR keeper=False
+  DRY pick 69 r5.13 team 7 'Trevor Lawrence' QB keeper=False
+  DRY pick 70 r5.14 team 6 'Rhamondre Stevenson' RB keeper=False
+  DRY pick 71 r6.1 team 6 'Harold Fannin Jr.' TE keeper=False
+  DRY pick 72 r6.2 team 7 'Matthew Golden' WR keeper=False
+  DRY pick 73 r6.3 team 11 'Chuba Hubbard' RB keeper=False
+  DRY pick 74 r6.4 team 14 'Jaxson Dart' QB keeper=False
+  DRY pick 75 r6.5 team 10 'Rico Dowdle' RB keeper=False
+  DRY pick 76 r6.6 team 4 'Emeka Egbuka' WR keeper=True
+  DRY pick 77 r6.7 team 3 'Dak Prescott' QB keeper=False
+  DRY pick 78 r6.8 team 2 'Travis Etienne Jr.' RB keeper=True
+  DRY pick 79 r6.9 team 8 'J.K. Dobbins' RB keeper=False
+  DRY pick 80 r6.10 team 12 'Christian Watson' WR keeper=False
+  DRY pick 81 r6.11 team 5 'Jonathon Brooks' RB keeper=False
+  DRY pick 82 r6.12 team 1 'Josh Downs' WR keeper=False
+  DRY pick 83 r6.13 team 9 'Brock Bowers' TE keeper=True
+  DRY pick 84 r6.14 team 13 'Justin Herbert' QB keeper=False
+  DRY pick 85 r7.1 team 13 'George Kittle' TE keeper=False
+  DRY pick 86 r7.2 team 9 'RJ Harvey' RB keeper=False
+  DRY pick 87 r7.3 team 1 'Kenny Gainwell' RB keeper=False
+  DRY pick 88 r7.4 team 5 'Caleb Williams' QB keeper=False
+  DRY pick 89 r7.5 team 12 'Tucker Kraft' TE keeper=False
+  DRY pick 90 r7.6 team 8 'Quinshon Judkins' RB keeper=True
+  DRY pick 91 r7.7 team 2 'Jacory Croskey-Merritt' RB keeper=False
+  DRY pick 92 r7.8 team 3 'Javonte Williams' RB keeper=True
+  DRY pick 93 r7.9 team 4 'Michael Wilson' WR keeper=False
+  DRY pick 94 r7.10 team 10 'Colston Loveland' TE keeper=True
+  DRY pick 95 r7.11 team 14 'Jordan Mason' RB keeper=False
+  DRY pick 96 r7.12 team 11 'Kyle Monangai' RB keeper=False
+  DRY pick 97 r7.13 team 7 'Dallas Goedert' TE keeper=False
+  DRY pick 98 r7.14 team 6 'Aaron Jones Sr.' RB keeper=False
+  DRY pick 99 r8.1 team 6 'Alec Pierce' WR keeper=False
+  DRY pick 100 r8.2 team 7 'Bo Nix' QB keeper=False
+  DRY pick 101 r8.3 team 11 'Rachaad White' RB keeper=False
+  DRY pick 102 r8.4 team 14 'Isaiah Likely' TE keeper=False
+  DRY pick 103 r8.5 team 10 'Chris Godwin Jr.' WR keeper=False
+  DRY pick 104 r8.6 team 4 "Wan'Dale Robinson" WR keeper=False
+  DRY pick 105 r8.7 team 3 'Jordan Addison' WR keeper=False
+  DRY pick 106 r8.8 team 2 'Quentin Johnston' WR keeper=False
+  DRY pick 107 r8.9 team 8 'Makai Lemon' WR keeper=False
+  DRY pick 108 r8.10 team 12 'Xavier Worthy' WR keeper=False
+  DRY pick 109 r8.11 team 5 'Tyler Warren' TE keeper=True
+  DRY pick 110 r8.12 team 1 'Brock Purdy' QB keeper=False
+  DRY pick 111 r8.13 team 9 'Blake Corum' RB keeper=False
+  DRY pick 112 r8.14 team 13 'Zach Charbonnet' RB keeper=False
+  DRY pick 113 r9.1 team 13 'Jerry Jeudy' WR keeper=False
+  DRY pick 114 r9.2 team 9 'Jakobi Meyers' WR keeper=False
+  DRY pick 115 r9.3 team 1 'Jalen McMillan' WR keeper=False
+  DRY pick 116 r9.4 team 5 'Patrick Mahomes' QB keeper=False
+  DRY pick 117 r9.5 team 12 'Romeo Doubs' WR keeper=False
+  DRY pick 118 r9.6 team 8 'Travis Kelce' TE keeper=False
+  DRY pick 119 r9.7 team 2 'Hunter Henry' TE keeper=False
+  DRY pick 120 r9.8 team 3 'Jake Ferguson' TE keeper=False
+  DRY pick 121 r9.9 team 4 'Chris Rodriguez Jr.' RB keeper=False
+  DRY pick 122 r9.10 team 10 'Woody Marks' RB keeper=False
+  DRY pick 123 r9.11 team 14 'Jayden Reed' WR keeper=False
+  DRY pick 124 r9.12 team 11 'KC Concepcion' WR keeper=False
+  DRY pick 125 r9.13 team 7 'Khalil Shakir' WR keeper=False
+  DRY pick 126 r9.14 team 6 'Stefon Diggs' WR keeper=False
+  DRY pick 127 r10.1 team 6 'Tyler Shough' QB keeper=False
+  DRY pick 128 r10.2 team 7 'Isiah Pacheco' RB keeper=False
+  DRY pick 129 r10.3 team 11 'Kyler Murray' QB keeper=False
+  DRY pick 130 r10.4 team 14 'Jayden Higgins' WR keeper=False
+  DRY pick 131 r10.5 team 10 'Deebo Samuel Sr.' WR keeper=False
+  DRY pick 132 r10.6 team 4 'Alvin Kamara' RB keeper=False
+  DRY pick 133 r10.7 team 3 'Travis Hunter' WR keeper=False
+  DRY pick 134 r10.8 team 2 'Jared Goff' QB keeper=False
+  DRY pick 135 r10.9 team 8 'Baker Mayfield' QB keeper=False
+  DRY pick 136 r10.10 team 12 'Tyrone Tracy Jr.' RB keeper=False
+  DRY pick 137 r10.11 team 5 'Jalen Coker' WR keeper=False
+  DRY pick 138 r10.12 team 1 'Denzel Boston' WR keeper=False
+  DRY pick 139 r10.13 team 9 'Tyler Allgeier' RB keeper=False
+  DRY pick 140 r10.14 team 13 'Mark Andrews' TE keeper=False
+  DRY pick 141 r11.1 team 13 'T.J. Hockenson' TE keeper=False
+  DRY pick 142 r11.2 team 9 'Tank Bigsby' RB keeper=False
+  DRY pick 143 r11.3 team 1 'Keaton Mitchell' RB keeper=False
+  DRY pick 144 r11.4 team 5 'Brandon Aubrey' K keeper=False
+  DRY pick 145 r11.5 team 12 'Dylan Sampson' RB keeper=False
+  DRY pick 146 r11.6 team 8 'Tyjae Spears' RB keeper=False
+  DRY pick 147 r11.7 team 2 'Tre Tucker' WR keeper=False
+  DRY pick 148 r11.8 team 3 'Jordan Love' QB keeper=False
+  DRY pick 149 r11.9 team 4 "Ja'Kobi Lane" WR keeper=False
+  DRY pick 150 r11.10 team 10 'Brian Robinson Jr.' RB keeper=False
+  DRY pick 151 r11.11 team 14 'Brenton Strange' TE keeper=False
+  DRY pick 152 r11.12 team 11 'Kenyon Sadiq' TE keeper=False
+  DRY pick 153 r11.13 team 7 'Texans D/ST' D/ST keeper=False
+  DRY pick 154 r11.14 team 6 'Matthew Stafford' QB keeper=True
+  DRY pick 155 r12.1 team 6 'Justice Hill' RB keeper=False
+  DRY pick 156 r12.2 team 7 'Evan McPherson' K keeper=False
+  DRY pick 157 r12.3 team 11 "De'Zhaun Stribling" WR keeper=False
+  DRY pick 158 r12.4 team 14 'Broncos D/ST' D/ST keeper=False
+  DRY pick 159 r12.5 team 10 'Malik Willis' QB keeper=False
+  DRY pick 160 r12.6 team 4 'Dalton Kincaid' TE keeper=False
+  DRY pick 161 r12.7 team 3 'Steelers D/ST' D/ST keeper=False
+  DRY pick 162 r12.8 team 2 'Jason Myers' K keeper=False
+  DRY pick 163 r12.9 team 8 'Ray Davis' RB keeper=False
+  DRY pick 164 r12.10 team 12 'Mike Washington Jr.' RB keeper=False
+  DRY pick 165 r12.11 team 5 'Nicholas Singleton' RB keeper=False
+  DRY pick 166 r12.12 team 1 "Tre' Harris" WR keeper=False
+  DRY pick 167 r12.13 team 9 'Jordan James' RB keeper=False
+  DRY pick 168 r12.14 team 13 'Adonai Mitchell' WR keeper=False
+  DRY pick 169 r13.1 team 13 'Germie Bernard' WR keeper=False
+  DRY pick 170 r13.2 team 9 'Rams D/ST' D/ST keeper=False
+  DRY pick 171 r13.3 team 1 'Bhayshul Tuten' RB keeper=True
+  DRY pick 172 r13.4 team 5 'Jaydon Blue' RB keeper=False
+  DRY pick 173 r13.5 team 12 'C.J. Stroud' QB keeper=False
+  DRY pick 174 r13.6 team 8 'Daniel Jones' QB keeper=False
+  DRY pick 175 r13.7 team 2 'Rashid Shaheed' WR keeper=False
+  DRY pick 176 r13.8 team 3 'Seahawks D/ST' D/ST keeper=False
+  DRY pick 177 r13.9 team 4 'Kaelon Black' RB keeper=False
+  DRY pick 178 r13.10 team 10 'Cameron Dicker' K keeper=False
+  DRY pick 179 r13.11 team 14 'Harrison Mevis' K keeper=False
+  DRY pick 180 r13.12 team 11 'Terrance Ferguson' TE keeper=False
+  DRY pick 181 r13.13 team 7 'Jalen Nailor' WR keeper=False
+  DRY pick 182 r13.14 team 6 'Ollie Gordon II' RB keeper=False
+  DRY pick 183 r14.1 team 6 'Ravens D/ST' D/ST keeper=False
+  DRY pick 184 r14.2 team 7 'Braelon Allen' RB keeper=False
+  DRY pick 185 r14.3 team 11 'Cam Little' K keeper=False
+  DRY pick 186 r14.4 team 14 'Kimani Vidal' RB keeper=False
+  DRY pick 187 r14.5 team 10 'Eagles D/ST' D/ST keeper=False
+  DRY pick 188 r14.6 team 4 "Ka'imi Fairbairn" K keeper=False
+  DRY pick 189 r14.7 team 3 'Eddy Pineiro' K keeper=False
+  DRY pick 190 r14.8 team 2 'Patriots D/ST' D/ST keeper=False
+  DRY pick 191 r14.9 team 8 'Browns D/ST' D/ST keeper=False
+  DRY pick 192 r14.10 team 12 'Packers D/ST' D/ST keeper=False
+  DRY pick 193 r14.11 team 5 'Jonah Coleman' RB keeper=False
+  DRY pick 194 r14.12 team 1 'Chargers D/ST' D/ST keeper=False
+  DRY pick 195 r14.13 team 9 'Jaylin Noel' WR keeper=False
+  DRY pick 196 r14.14 team 13 'Lions D/ST' D/ST keeper=False
+  DRY pick 197 r15.1 team 13 'Harrison Butker' K keeper=False
+  DRY pick 198 r15.2 team 9 'Jake Bates' K keeper=False
+  DRY pick 199 r15.3 team 1 'Tyler Loop' K keeper=False
+  DRY pick 200 r15.4 team 5 'Jaguars D/ST' D/ST keeper=False
+  DRY pick 201 r15.5 team 12 'Cairo Santos' K keeper=False
+  DRY pick 202 r15.6 team 8 'Will Reichard' K keeper=False
+  DRY pick 203 r15.7 team 2 'Calvin Ridley' WR keeper=False
+  DRY pick 204 r15.8 team 3 'Juwan Johnson' TE keeper=False
+  DRY pick 205 r15.9 team 4 'Buccaneers D/ST' D/ST keeper=False
+  DRY pick 206 r15.10 team 10 'Keon Coleman' WR keeper=False
+  DRY pick 207 r15.11 team 14 'Jauan Jennings' WR keeper=False
+  DRY pick 208 r15.12 team 11 'Chiefs D/ST' D/ST keeper=False
+  DRY pick 209 r15.13 team 7 'Omar Cooper Jr.' WR keeper=False
+  DRY pick 210 r15.14 team 6 'Chris Boswell' K keeper=False
+[draft_picks] 210 picks seen, inserted 0 (existing left untouched).
+
+=== SUMMARY ===
+{
+  "espn_team_map": 14,
+  "matchups": {
+    "inserted": 0,
+    "updated": 0,
+    "per_week": {
+      "1": 7,
+      "2": 7,
+      "3": 7,
+      "4": 7
+    }
+  },
+  "box_scores": {
+    "rows_seen": 875,
+    "inserted": 0,
+    "updated": 0,
+    "per_week": {
+      "1": {
+        "starters": 126,
+        "bench": 84,
+        "ir": 5,
+        "no_stats": 0
+      },
+      "2": {
+        "starters": 126,
+        "bench": 83,
+        "ir": 9,
+        "no_stats": 0
+      },
+      "3": {
+        "starters": 126,
+        "bench": 83,
+        "ir": 11,
+        "no_stats": 0
+      },
+      "4": {
+        "starters": 126,
+        "bench": 84,
+        "ir": 12,
+        "no_stats": 1
+      }
+    },
+    "bye_sides_skipped": {
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 0
+    },
+    "existing_rows_matched": 653,
+    "existing_rows_not_returned": 0,
+    "diff_counts": {
+      "points": 0,
+      "name": 0,
+      "position": 0,
+      "starter_now_bench": 0,
+      "new_starter_rows": 0
+    }
+  },
+  "draft_picks": {
+    "inserted": 0,
+    "count_seen": 210
+  }
+}
+
+No warnings.
+
+(DRY RUN — nothing was written to the database.)
+
+--- stderr ---

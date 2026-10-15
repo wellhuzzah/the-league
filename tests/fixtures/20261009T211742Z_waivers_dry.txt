@@ -1,0 +1,37 @@
+$ espn_transactions_import.py --season 2026 --dry-run
+exit=0
+
+=== ESPN transactions import [2026] — DRY RUN (no DB writes) ===
+
+================ 2026 ================
+[sweep] scoringPeriodId 0..5; players loaded 11618
+[kept] 142 rows by type/status:
+    FREEAGENT EXECUTED                           66
+    ROSTER    EXECUTED                           10
+    WAIVER    CANCELED                           4
+    WAIVER    EXECUTED                           36
+    WAIVER    FAILED_INVALIDPLAYERSOURCE         18
+    WAIVER    FAILED_PLAYERALREADYDROPPED        8
+[kept] 249 transaction_items: 132 ADD, 117 DROP
+[kept] by classification rule: {'4 as given': 138, '1 CANCEL': 4}
+[skipped] by type: {'ROSTER (no DROP)': 163, 'TRADE_ACCEPT': 1, 'TRADE_DECLINE': 11, 'TRADE_UPHOLD': 1, 'DRAFT': 210, 'FUTURE_ROSTER': 16, 'TRADE_PROPOSAL': 5}
+[skipped] by rule: {'2 isPending': 7}
+[check] FAILED_INVALIDPLAYERSOURCE rows (losing bids): 18
+[check] CANCEL rows that were also isPending (kept by rule 1): 0
+[check] top-level teamId differs from item team: 0
+[check] processDate earlier than proposedDate: 0
+[check] duplicate ids across periods: 69; txn scoringPeriodId != queried period: 97
+[check] unresolved player ids (stored with NULL name): 0
+[check] failed claims linked to a system CANCEL twin (cancel_twin_of): 0 of 26 FAILED_* WAIVER rows
+[check] multi-player moves stored: 0
+[waivers] executed claims by UTC date: 7 dates, 36 ours vs 36 ESPN; mismatched dates: 0
+[faab] teams matching acquisitionBudgetSpent: WAIVER only 14/14, WAIVER+FREEAGENT 14/14
+[truncation] DRAFT rows returned 210 vs draft_picks in DB 210 -> OK
+
+=== SUMMARY ===
+season | kept | WAIVER | FREEAGENT | ROSTER drops | FAILED_INVALIDPLAYERSOURCE | unresolved players
+2026 | 142 | 66 | 66 | 10 | 18 | 0
+
+(DRY RUN — nothing was written to the database.)
+
+--- stderr ---

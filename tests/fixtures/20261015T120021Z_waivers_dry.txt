@@ -1,0 +1,40 @@
+$ espn_transactions_import.py --season 2026 --dry-run
+exit=0
+
+=== ESPN transactions import [2026] — DRY RUN (no DB writes) ===
+
+================ 2026 ================
+[sweep] scoringPeriodId 0..6; players loaded 11618
+[kept] 190 rows by type/status:
+    FREEAGENT EXECUTED                           83
+    ROSTER    EXECUTED                           12
+    WAIVER    CANCELED                           7
+    WAIVER    EXECUTED                           50
+    WAIVER    FAILED_INVALIDPLAYERSOURCE         29
+    WAIVER    FAILED_PLAYERALREADYDROPPED        8
+    WAIVER    FAILED_ROSTERLIMIT                 1
+[kept] 338 transaction_items: 178 ADD, 160 DROP
+[kept] by classification rule: {'4 as given': 183, '1 CANCEL': 7}
+[skipped] by type: {'ROSTER (no DROP)': 227, 'TRADE_PROPOSAL': 8, 'TRADE_DECLINE': 16, 'TRADE_ACCEPT': 3, 'TRADE_UPHOLD': 3, 'DRAFT': 210, 'FUTURE_ROSTER': 26}
+[skipped] by rule: {'2 isPending': 10}
+[check] FAILED_INVALIDPLAYERSOURCE rows (losing bids): 29
+[check] CANCEL rows that were also isPending (kept by rule 1): 0
+[check] top-level teamId differs from item team: 0
+[check] processDate earlier than proposedDate: 0
+[check] duplicate ids across periods: 97; txn scoringPeriodId != queried period: 139
+[check] unresolved player ids (stored with NULL name): 0
+[check] failed claims linked to a system CANCEL twin (cancel_twin_of): 0 of 38 FAILED_* WAIVER rows
+[check] multi-player moves stored: 0
+[waivers] executed claims by UTC date: 9 dates, 50 ours vs 50 ESPN; mismatched dates: 0
+[faab] teams matching acquisitionBudgetSpent: WAIVER only 12/14, WAIVER+FREEAGENT 12/14
+    ESPN team 4 (team_id 4): spent 72; WAIVER 82 X; WAIVER+FA 82 X
+    ESPN team 8 (team_id 8): spent 10; WAIVER 0 X; WAIVER+FA 0 X
+[truncation] DRAFT rows returned 210 vs draft_picks in DB 210 -> OK
+
+=== SUMMARY ===
+season | kept | WAIVER | FREEAGENT | ROSTER drops | FAILED_INVALIDPLAYERSOURCE | unresolved players
+2026 | 190 | 95 | 83 | 12 | 29 | 0
+
+(DRY RUN — nothing was written to the database.)
+
+--- stderr ---
