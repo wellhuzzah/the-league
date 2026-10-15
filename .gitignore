@@ -17,8 +17,9 @@ __pycache__/
 /ddns_update.state
 /ddns_task.xml
 *.md
-!/docs/weekly_maintenance_runbook.md
 *.sql
 !/schema_v3.sql
 /espn_raw/
 /backups/
+/docs/*
+!/docs/weekly_maintenance_runbook.md
