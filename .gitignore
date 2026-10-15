@@ -23,3 +23,4 @@ __pycache__/
 /backups/
 /docs/*
 !/docs/weekly_maintenance_runbook.md
+!/docs/espn_playoff_seeding_faq.md
