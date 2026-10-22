@@ -4,7 +4,10 @@ import os
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# The API's own read-only role. No fallback to DATABASE_URL (the scripts' writer role).
+DATABASE_URL = os.getenv("API_DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("API_DATABASE_URL is not set in .env; refusing to start")
 
 pool = None
 

@@ -1,10 +1,18 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import seasons, records, draft, matchups, teams, boxscores
 from app.routers import tower
 from app.routers import transactions
 
-app = FastAPI()
+# /docs, /redoc and /openapi.json only with API_DOCS=1 (local debugging); off in production
+docs = os.getenv("API_DOCS") == "1"
+app = FastAPI(
+    docs_url="/docs" if docs else None,
+    redoc_url="/redoc" if docs else None,
+    openapi_url="/openapi.json" if docs else None,
+)
 
 app.add_middleware(
     CORSMiddleware,
