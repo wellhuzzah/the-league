@@ -1,5 +1,5 @@
 r"""
-API smoke test: every GET route in app.routes, called with realistic parameters, must return 200 and
+API smoke test: every GET route in the app, called with realistic parameters, must return 200 and
 the top-level shape recorded in SHAPES (a list's length floor and its first item's keys, or a
 dict's keys). A GET route with no case here fails the test, so new routes get covered.
 
@@ -234,10 +234,12 @@ class ApiSmoke(unittest.TestCase):
 		self.assertEqual(asyncio.run(who()), "rockwood_api")
 
 	def test_every_get_route_has_a_case(self):
-		from fastapi.routing import APIRoute
+		# From the OpenAPI schema (public API; app.openapi() works with the docs URLs off). Since
+		# fastapi 0.161 app.routes holds included routers, not their routes. The schema drops
+		# the :path converter, so the templates are compared without it.
 		from app.main import app
-		routes = {r.path for r in app.routes if isinstance(r, APIRoute) and "GET" in r.methods}
-		covered = {template for template, _ in CASES}
+		routes = {p for p, ops in app.openapi()["paths"].items() if "get" in ops}
+		covered = {template.replace(":path}", "}") for template, _ in CASES}
 		self.assertEqual(sorted(routes - covered), [], "GET routes with no smoke-test case")
 		self.assertEqual(sorted(covered - routes), [], "cases for routes that no longer exist")
 

@@ -124,6 +124,8 @@ task stops running altogether. Messages contain the run's log lines with every `
 
 ## Tests
 
-`venv\Scripts\python.exe -B -m unittest discover -s tests -v` replays captured dry runs through the guardrails
-offline (no DB, ESPN or notifications). Run it after any change to `weekly_maintenance.py`, then
+`venv\Scripts\python.exe -B -m unittest discover -s tests -v` runs two suites. `test_guardrails.py` replays
+captured dry runs through the guardrails offline (no DB, ESPN or notifications). `test_api_smoke.py` needs
+the database: it starts the API from the working tree on a spare port as `rockwood_api` and calls every GET
+route (read-only; skipped if `.env` has no `API_DATABASE_URL`). Run them after any change to `weekly_maintenance.py`, then
 `venv\Scripts\python.exe -c "import weekly_maintenance, ddns_update"`, since the DDNS task imports the wrapper.
