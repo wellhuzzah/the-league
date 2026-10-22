@@ -61,3 +61,54 @@ CREATE TABLE transaction_items (
 	UNIQUE (transaction_id, item_type, espn_player_id)
 );
 CREATE INDEX idx_transaction_items_player ON transaction_items (espn_player_id);
+
+-- ===========================================================================
+-- 3. Least-privilege roles + ANALYZE function   (2026-10-22, audit Phase 1)
+-- ===========================================================================
+-- Run as postgres. Passwords are set separately (ALTER ROLE ... PASSWORD) and live only in .env;
+-- roles are cluster-wide and not in pg_dump, so on a new server run this before restoring.
+
+CREATE ROLE rockwood_api    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 20;
+CREATE ROLE rockwood_writer LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 10;
+CREATE ROLE rockwood_backup LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2;
+GRANT pg_read_all_data TO rockwood_backup;
+
+REVOKE TEMPORARY ON DATABASE rockwood FROM PUBLIC;
+GRANT CONNECT ON DATABASE rockwood TO rockwood_api, rockwood_writer, rockwood_backup;
+GRANT USAGE ON SCHEMA public TO rockwood_api, rockwood_writer;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO rockwood_api, rockwood_writer;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public GRANT SELECT ON TABLES TO rockwood_api, rockwood_writer;
+
+-- API: the one write route, POST /tower/score
+GRANT INSERT ON tower_scores TO rockwood_api;
+GRANT USAGE ON SEQUENCE tower_scores_id_seq TO rockwood_api;
+
+-- Writer: exactly what espn_import.py and espn_transactions_import.py execute
+GRANT INSERT, UPDATE ON espn_team_map, matchups, box_scores, transactions TO rockwood_writer;  -- ON CONFLICT DO UPDATE
+GRANT INSERT         ON draft_picks TO rockwood_writer;                                       -- ON CONFLICT DO NOTHING
+GRANT INSERT, DELETE ON transaction_items TO rockwood_writer;                                 -- delete + reinsert per txn
+GRANT USAGE ON SEQUENCE espn_team_map_id_seq, matchups_id_seq, box_scores_id_seq,
+                        transactions_id_seq, draft_picks_id_seq, transaction_items_id_seq TO rockwood_writer;
+
+-- PG 16: only a table's owner may ANALYZE it, so weekly_maintenance calls this instead
+CREATE FUNCTION public.rockwood_analyze() RETURNS void
+	LANGUAGE plpgsql SECURITY DEFINER
+	SET search_path = pg_catalog, public
+AS $$
+BEGIN
+	ANALYZE;
+END $$;
+REVOKE EXECUTE ON FUNCTION public.rockwood_analyze() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rockwood_analyze() TO rockwood_writer;
+
+-- ===========================================================================
+-- 4. Name and week lookup indexes   (2026-10-22, audit Phase 2)
+-- ===========================================================================
+-- Exact case-insensitive name lookups (transactions exact search, random-player's draft info)
+-- go from seq scans (~20 ms) to index scans (<0.1 ms). They don't help ILIKE '%term%'.
+
+CREATE INDEX idx_box_scores_player_lower        ON box_scores (lower(player_name));
+CREATE INDEX idx_transaction_items_player_lower ON transaction_items (lower(player_name));
+CREATE INDEX idx_draft_picks_player_lower       ON draft_picks (lower(player_name));
+CREATE INDEX idx_box_scores_season_week         ON box_scores (season, week);
+ANALYZE box_scores, transaction_items, draft_picks;

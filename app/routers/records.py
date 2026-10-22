@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.database import get_pool
+from app.params import Limit
 
 router = APIRouter(
     prefix="/records",
@@ -50,7 +51,7 @@ async def get_alltime_standings():
 
 
 @router.get("/scoring/highest-season")
-async def get_highest_season_scores(limit: int = 10):
+async def get_highest_season_scores(limit: int = Limit(10)):
     """Highest points_for totals for a single season."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -76,7 +77,7 @@ async def get_highest_season_scores(limit: int = 10):
 
 
 @router.get("/scoring/lowest-season")
-async def get_lowest_season_scores(limit: int = 10):
+async def get_lowest_season_scores(limit: int = Limit(10)):
     """Lowest points_for totals for a single season."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -102,7 +103,7 @@ async def get_lowest_season_scores(limit: int = 10):
 
 
 @router.get("/scoring/best-single-week")
-async def get_best_single_week(limit: int = 10):
+async def get_best_single_week(limit: int = Limit(10)):
     """Highest individual week scores all time."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -134,7 +135,7 @@ async def get_best_single_week(limit: int = 10):
 
 
 @router.get("/scoring/worst-single-week")
-async def get_worst_single_week(limit: int = 10):
+async def get_worst_single_week(limit: int = Limit(10)):
     """Lowest individual week scores all time."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -166,7 +167,7 @@ async def get_worst_single_week(limit: int = 10):
 
 
 @router.get("/streaks/wins")
-async def get_win_streaks(limit: int = 10):
+async def get_win_streaks(limit: int = Limit(10)):
     """Longest winning streaks all time across all seasons."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -233,7 +234,7 @@ async def get_win_streaks(limit: int = 10):
 
 
 @router.get("/streaks/losses")
-async def get_loss_streaks(limit: int = 10):
+async def get_loss_streaks(limit: int = Limit(10)):
     """Longest losing streaks all time across all seasons."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -352,7 +353,7 @@ async def get_draft_by_owner():
 
 
 @router.get("/scoring/highest-losing-scores")
-async def get_highest_losing_scores(limit: int = 10):
+async def get_highest_losing_scores(limit: int = Limit(10)):
     """Highest scores that still resulted in a loss — the unluckiest weeks."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -386,7 +387,7 @@ async def get_highest_losing_scores(limit: int = 10):
 
 
 @router.get("/scoring/lowest-winning-scores")
-async def get_lowest_winning_scores(limit: int = 10):
+async def get_lowest_winning_scores(limit: int = Limit(10)):
     """Lowest scores that still resulted in a win — the luckiest weeks."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""

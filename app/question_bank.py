@@ -2,7 +2,9 @@
 question_bank.py — The Tower question generators
 
 Each generator is an async function that:
-  - accepts a db connection (asyncpg)
+  - accepts a db connection (asyncpg) and rng, a random.Random: all randomness goes through it,
+    never the module-global random, so a seeded rng (the daily round) is deterministic even
+    while other requests run concurrently
   - queries real data
   - returns a dict matching the QuestionResult shape, or None if no data found
 
@@ -29,13 +31,13 @@ from typing import Optional
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _other_owners(all_owners: list[str], exclude: str, n: int = 3) -> list[str]:
+def _other_owners(rng: random.Random, all_owners: list[str], exclude: str, n: int = 3) -> list[str]:
 	"""Pick n distinct owners from all_owners that are not exclude."""
 	pool = [o for o in all_owners if o != exclude]
-	return random.sample(pool, min(n, len(pool)))
+	return rng.sample(pool, min(n, len(pool)))
 
 
-def _numeric_distractors(value: float, n: int = 3, spread: float = 0.12) -> list[str]:
+def _numeric_distractors(rng: random.Random, value: float, n: int = 3, spread: float = 0.12) -> list[str]:
 	"""
 	Generate n plausible numeric distractors around value.
 	spread: fraction of value to vary by (default ±12%)
@@ -43,7 +45,7 @@ def _numeric_distractors(value: float, n: int = 3, spread: float = 0.12) -> list
 	results = set()
 	attempts = 0
 	while len(results) < n and attempts < 50:
-		delta = random.uniform(-spread, spread)
+		delta = rng.uniform(-spread, spread)
 		candidate = round(value * (1 + delta), 1)
 		if candidate != value:
 			results.add(candidate)
@@ -63,9 +65,9 @@ def _year_distractors(year: int, all_seasons: list[int], n: int = 3) -> list[str
 # Category: Season Outcomes
 # ---------------------------------------------------------------------------
 
-async def q_championship_winner(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_championship_winner(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who won the championship in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner FROM records r
@@ -84,14 +86,14 @@ async def q_championship_winner(db, seasons: list[int], owners: list[str]) -> Op
 		"difficulty": 2,
 		"question": f"Who won the championship in the {season} season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{season} champion — {answer}",
 	}
 
 
-async def q_sacko_winner(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_sacko_winner(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who won the sacko in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner FROM records r
@@ -110,14 +112,14 @@ async def q_sacko_winner(db, seasons: list[int], owners: list[str]) -> Optional[
 		"difficulty": 2,
 		"question": f"Who earned the Sacko in the {season} season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{season} Sacko — {answer}",
 	}
 
 
-async def q_most_points_season(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_most_points_season(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who scored the most points in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner, r.points_for FROM records r
@@ -138,14 +140,14 @@ async def q_most_points_season(db, seasons: list[int], owners: list[str]) -> Opt
 		"difficulty": 2,
 		"question": f"Who scored the most total points in the {season} season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{season} — {pts:.1f} points",
 	}
 
 
-async def q_season_wins_leader(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_season_wins_leader(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who had the most wins in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner, r.wins FROM records r
@@ -166,14 +168,14 @@ async def q_season_wins_leader(db, seasons: list[int], owners: list[str]) -> Opt
 		"difficulty": 2,
 		"question": f"Who finished with the most wins in the {season} regular season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{season} — {wins} wins",
 	}
 
 
-async def q_final_standing(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_final_standing(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""What place did owner X finish in year Y?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	# pick a random owner who played that season
 	rows = await db.fetch(
 		"""
@@ -185,13 +187,13 @@ async def q_final_standing(db, seasons: list[int], owners: list[str]) -> Optiona
 	)
 	if not rows:
 		return None
-	row = random.choice(rows)
+	row = rng.choice(rows)
 	owner = row["owner"]
 	standing = row["final_standing"]
 	suffix = {1: "1st", 2: "2nd", 3: "3rd"}.get(standing, f"{standing}th")
 	# distractors: other plausible standings
 	all_standings = [r["final_standing"] for r in rows if r["final_standing"] != standing]
-	distractor_standings = random.sample(all_standings, min(3, len(all_standings)))
+	distractor_standings = rng.sample(all_standings, min(3, len(all_standings)))
 	distractors = [
 		{1: "1st", 2: "2nd", 3: "3rd"}.get(s, f"{s}th") for s in distractor_standings
 	]
@@ -210,9 +212,9 @@ async def q_final_standing(db, seasons: list[int], owners: list[str]) -> Optiona
 # Category: Scoring Records
 # ---------------------------------------------------------------------------
 
-async def q_highest_single_week(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_highest_single_week(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who scored the most points in a single week in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner, m.week,
@@ -239,14 +241,14 @@ async def q_highest_single_week(db, seasons: list[int], owners: list[str]) -> Op
 		"difficulty": 2,
 		"question": f"Who scored the most points in a single week during the {season} season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"Week {week}, {season} — {score:.1f} pts",
 	}
 
 
-async def q_highest_score_exact(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_highest_score_exact(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""What was the highest single-week score in year X? (numeric answer)"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT GREATEST(home_score, away_score) AS top_score,
@@ -273,14 +275,14 @@ async def q_highest_score_exact(db, seasons: list[int], owners: list[str]) -> Op
 		"difficulty": 3,
 		"question": f"What was the highest single-week score in the {season} season? (scored by {scorer}, Week {week})",
 		"answer": answer,
-		"distractors": _numeric_distractors(score),
+		"distractors": _numeric_distractors(rng, score),
 		"flavor": f"{scorer}, Week {week}, {season} — {score:.1f} pts",
 	}
 
 
-async def q_closest_game(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_closest_game(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who were the two teams in the closest game in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT ht.owner AS home, at.owner AS away, m.margin, m.week
@@ -300,7 +302,7 @@ async def q_closest_game(db, seasons: list[int], owners: list[str]) -> Optional[
 	margin = float(row["margin"])
 	answer = f"{home} vs {away}"
 	# build plausible distractors from other owners
-	others = _other_owners(owners, home, n=6)
+	others = _other_owners(rng, owners, home, n=6)
 	others = [o for o in others if o != away]
 	d1 = f"{away} vs {others[0]}" if others else f"{home} vs {others[0]}"
 	d2 = f"{others[1]} vs {others[2]}" if len(others) >= 3 else f"{home} vs {others[1]}"
@@ -320,10 +322,10 @@ async def q_closest_game(db, seasons: list[int], owners: list[str]) -> Optional[
 # Category: Draft
 # ---------------------------------------------------------------------------
 
-async def q_first_overall_pick(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_first_overall_pick(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who had the first overall pick in year X?"""
 	# draft data available all seasons
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT t.owner, d.player_name FROM draft_picks d
@@ -343,14 +345,14 @@ async def q_first_overall_pick(db, seasons: list[int], owners: list[str]) -> Opt
 		"difficulty": 2,
 		"question": f"Who held the first overall pick in the {season} draft?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{season} pick #1 — {player}",
 	}
 
 
-async def q_first_overall_player(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_first_overall_player(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who was taken first overall in year X?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
 		SELECT d.player_name, t.owner FROM draft_picks d
@@ -374,7 +376,7 @@ async def q_first_overall_player(db, seasons: list[int], owners: list[str]) -> O
 		season,
 	)
 	distractor_pool = [r["player_name"] for r in others if r["player_name"] != answer]
-	distractors = random.sample(distractor_pool, min(3, len(distractor_pool)))
+	distractors = rng.sample(distractor_pool, min(3, len(distractor_pool)))
 	if len(distractors) < 3:
 		return None
 	return {
@@ -388,9 +390,9 @@ async def q_first_overall_player(db, seasons: list[int], owners: list[str]) -> O
 	}
 
 
-async def q_draft_position_first_round(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_draft_position_first_round(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""What position did owner X draft first in year Y?"""
-	season = random.choice(seasons)
+	season = rng.choice(seasons)
 	rows = await db.fetch(
 		"""
 		SELECT t.owner, d.position, d.round_num FROM draft_picks d
@@ -402,12 +404,12 @@ async def q_draft_position_first_round(db, seasons: list[int], owners: list[str]
 	)
 	if not rows:
 		return None
-	row = random.choice(rows)
+	row = rng.choice(rows)
 	owner = row["owner"]
 	answer = row["position"]
 	all_positions = ["QB", "RB", "WR", "TE", "K", "D/ST"]
 	distractors = [p for p in all_positions if p != answer]
-	distractors = random.sample(distractors, min(3, len(distractors)))
+	distractors = rng.sample(distractors, min(3, len(distractors)))
 	return {
 		"id": f"draft_pos_{owner.replace(' ', '_')}_{season}",
 		"category": "draft",
@@ -423,13 +425,13 @@ async def q_draft_position_first_round(db, seasons: list[int], owners: list[str]
 # Category: Player (2018+ only)
 # ---------------------------------------------------------------------------
 
-async def q_top_scorer_position_week(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_top_scorer_position_week(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who had the top scoring [position] in week X of year Y? (2018+ only)"""
 	box_seasons = [s for s in seasons if s >= 2018]
 	if not box_seasons:
 		return None
-	season = random.choice(box_seasons)
-	position = random.choice(["QB", "RB", "WR", "TE"])
+	season = rng.choice(box_seasons)
+	position = rng.choice(["QB", "RB", "WR", "TE"])
 
 	row = await db.fetchrow(
 		"""
@@ -466,7 +468,7 @@ async def q_top_scorer_position_week(db, seasons: list[int], owners: list[str]) 
 	distractor_pool = [r["player_name"] for r in others]
 	if len(distractor_pool) < 3:
 		return None
-	distractors = random.sample(distractor_pool, 3)
+	distractors = rng.sample(distractor_pool, 3)
 	return {
 		"id": f"top_{position}_week_{season}",
 		"category": "player",
@@ -478,12 +480,12 @@ async def q_top_scorer_position_week(db, seasons: list[int], owners: list[str]) 
 	}
 
 
-async def q_player_owner(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_player_owner(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who drafted [player] in year X? (2018+ box score seasons)"""
 	box_seasons = [s for s in seasons if s >= 2018]
 	if not box_seasons:
 		return None
-	season = random.choice(box_seasons)
+	season = rng.choice(box_seasons)
 	# pick a notable starter (high scorer)
 	row = await db.fetchrow(
 		"""
@@ -510,7 +512,7 @@ async def q_player_owner(db, seasons: list[int], owners: list[str]) -> Optional[
 		"difficulty": 3,
 		"question": f"Who had {player} on their roster in the {season} season?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{player}, {season} — rostered by {answer}",
 	}
 
@@ -519,7 +521,7 @@ async def q_player_owner(db, seasons: list[int], owners: list[str]) -> Optional[
 # Category: Head to Head
 # ---------------------------------------------------------------------------
 
-async def q_h2h_series_leader(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_h2h_series_leader(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who leads the all-time H2H series between owner A and owner B?"""
 	# pick two owners who have played each other a meaningful number of times
 	row = await db.fetchrow(
@@ -579,7 +581,7 @@ async def q_h2h_series_leader(db, seasons: list[int], owners: list[str]) -> Opti
 		"difficulty": 3,
 		"question": f"Who leads the all-time series between {owner_a} and {owner_b}?",
 		"answer": answer,
-		"distractors": [other, "Even series", _other_owners(owners, answer, n=1)[0]],
+		"distractors": [other, "Even series", _other_owners(rng, owners, answer, n=1)[0]],
 		"flavor": f"{answer} leads {leader_wins}–{trailer_wins} ({total} games played)",
 	}
 
@@ -588,7 +590,7 @@ async def q_h2h_series_leader(db, seasons: list[int], owners: list[str]) -> Opti
 # Category: All-Time / Career
 # ---------------------------------------------------------------------------
 
-async def q_alltime_wins_leader(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_alltime_wins_leader(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who has the most all-time wins?"""
 	row = await db.fetchrow(
 		"""
@@ -609,12 +611,12 @@ async def q_alltime_wins_leader(db, seasons: list[int], owners: list[str]) -> Op
 		"difficulty": 1,
 		"question": "Who has the most all-time wins in league history?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{answer} — {wins} career wins",
 	}
 
 
-async def q_most_championships(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_most_championships(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who has won the most championships?"""
 	row = await db.fetchrow(
 		"""
@@ -636,12 +638,12 @@ async def q_most_championships(db, seasons: list[int], owners: list[str]) -> Opt
 		"difficulty": 1,
 		"question": "Who has won the most championships in league history?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{answer} — {titles} championships",
 	}
 
 
-async def q_most_sackos(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_most_sackos(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who has the most sacko finishes?"""
 	row = await db.fetchrow(
 		"""
@@ -665,17 +667,17 @@ async def q_most_sackos(db, seasons: list[int], owners: list[str]) -> Optional[d
 		"difficulty": 2,
 		"question": "Who has earned the most Sacko finishes in league history?",
 		"answer": answer,
-		"distractors": _other_owners(owners, answer),
+		"distractors": _other_owners(rng, owners, answer),
 		"flavor": f"{answer} — {sackos} Sacko finishes",
 	}
 
 
-async def q_championship_game_hero(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_championship_game_hero(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who scored the most points in the championship game of year X?"""
 	box_seasons = [s for s in seasons if s >= 2018]
 	if not box_seasons:
 		return None
-	season = random.choice(box_seasons)
+	season = rng.choice(box_seasons)
 
 	champ = await db.fetchrow(
 		"""
@@ -728,7 +730,7 @@ async def q_championship_game_hero(db, seasons: list[int], owners: list[str]) ->
 	distractor_pool = [r["player_name"] for r in others]
 	if len(distractor_pool) < 3:
 		return None
-	distractors = random.sample(distractor_pool, 3)
+	distractors = rng.sample(distractor_pool, 3)
 
 	return {
 		"id": f"champ_hero_{season}",
@@ -741,13 +743,13 @@ async def q_championship_game_hero(db, seasons: list[int], owners: list[str]) ->
 	}
 
 
-async def q_streamed_kicker_dst(db, seasons: list[int], owners: list[str]) -> Optional[dict]:
+async def q_streamed_kicker_dst(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Which owner started the most unique kickers or DSTs in year X? (streaming indicator)"""
 	box_seasons = [s for s in seasons if s >= 2018]
 	if not box_seasons:
 		return None
-	season = random.choice(box_seasons)
-	position = random.choice(["K", "D/ST"])
+	season = rng.choice(box_seasons)
+	position = rng.choice(["K", "D/ST"])
 	label = "kickers" if position == "K" else "defenses"
 
 	rows = await db.fetch(
@@ -777,7 +779,7 @@ async def q_streamed_kicker_dst(db, seasons: list[int], owners: list[str]) -> Op
 	distractor_pool = [r["owner"] for r in rows[1:]]
 	distractors = distractor_pool[:3]
 	if len(distractors) < 3:
-		distractors += _other_owners(owners, answer, n=3 - len(distractors))
+		distractors += _other_owners(rng, owners, answer, n=3 - len(distractors))
 
 	return {
 		"id": f"streamed_{position.replace('/', '')}_{season}",

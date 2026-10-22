@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
+from app.params import Limit, like_escape, search_term
 
 router = APIRouter(
     prefix="/boxscores",
@@ -8,7 +9,7 @@ router = APIRouter(
 
 
 @router.get("/top-performances")
-async def get_top_performances(limit: int = 25, position: str = None):
+async def get_top_performances(limit: int = Limit(25), position: str = None):
     """Highest single-game scores by any player across all seasons."""
     async with (await get_pool()).acquire() as db:
         if position:
@@ -151,7 +152,7 @@ async def get_team_boxscores(team_id: int, season: int = None, include_bench: bo
 
 
 @router.get("/team/{team_id}/best-weeks")
-async def get_team_best_weeks(team_id: int, limit: int = 10):
+async def get_team_best_weeks(team_id: int, limit: int = Limit(10)):
     """A team's best individual player performances ever."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -217,9 +218,9 @@ async def get_team_position_totals(team_id: int):
 
 @router.get("/player/{player_name:path}/history")
 async def get_player_history(player_name: str):
-    """All appearances of a player across all seasons and teams. Case-insensitive partial match."""
-    if not player_name.strip():
-        raise HTTPException(status_code=404, detail="Player not found")
+    """All appearances of a player across all seasons and teams. Case-insensitive partial match
+    on at least 2 characters; % and _ match literally."""
+    term = search_term(player_name)
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -238,7 +239,7 @@ async def get_player_history(player_name: str):
             WHERE bs.player_name ILIKE $1
               AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-        """, f"%{player_name}%")
+        """, f"%{like_escape(term)}%")
 
         if not rows:
             return {"query": player_name, "results": [], "total_appearances": 0}
@@ -378,7 +379,7 @@ async def get_random_player():
                 MIN(overall_pick)                      AS earliest_pick,
                 MIN(season)                            AS first_drafted
             FROM draft_picks
-            WHERE player_name ILIKE $1
+            WHERE lower(player_name) = lower($1)
         """, name)
 
         # Seasons active

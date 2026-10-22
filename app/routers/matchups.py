@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.database import get_pool
+from app.params import Limit
 
 router = APIRouter(
     prefix="/matchups",
@@ -158,7 +159,7 @@ async def get_week_matchups(year: int, week: int):
 
 
 @router.get("/records/highest-scores")
-async def get_highest_scores(limit: int = 10):
+async def get_highest_scores(limit: int = Limit(10)):
     """Highest single-week scores all time."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -186,7 +187,7 @@ async def get_highest_scores(limit: int = 10):
 
 
 @router.get("/records/biggest-blowouts")
-async def get_biggest_blowouts(limit: int = 10):
+async def get_biggest_blowouts(limit: int = Limit(10)):
     """Games with the largest margin of victory all time."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -219,7 +220,7 @@ async def get_biggest_blowouts(limit: int = 10):
 
 
 @router.get("/records/closest-games")
-async def get_closest_games(limit: int = 10):
+async def get_closest_games(limit: int = Limit(10)):
     """Games with the smallest margin of victory all time."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""

@@ -15,11 +15,11 @@ Dependencies: question_bank.py must be at app/question_bank.py
 
 import hashlib
 import random
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.database import get_pool
 from app.question_bank import QUESTION_GENERATORS
@@ -46,17 +46,19 @@ async def _load_context(db):
 # Round builder — shared by /round and /daily
 # ---------------------------------------------------------------------------
 
-async def _build_round(db, count: int):
+async def _build_round(db, rng: random.Random, count: int):
 	"""
 	Returns `count` deduplicated questions sampled randomly from all generators.
 	Shuffles answer options so correct answer isn't always in the same position.
+	All randomness comes from rng (never the module-global random), so a seeded
+	rng gives the same round even while other requests run concurrently.
 	"""
 	seasons, owners = await _load_context(db)
 
 	questions = []
 	seen_ids = set()
 	generators = QUESTION_GENERATORS.copy()
-	random.shuffle(generators)
+	rng.shuffle(generators)
 
 	# attempt each generator; retry shuffled pool until we have enough or exhaust
 	attempts = 0
@@ -67,7 +69,7 @@ async def _build_round(db, count: int):
 		attempts += 1
 
 		try:
-			result = await generator(db, seasons, owners)
+			result = await generator(db, rng, seasons, owners)
 		except Exception:
 			continue
 
@@ -80,7 +82,7 @@ async def _build_round(db, count: int):
 
 		# shuffle options so correct answer is random position
 		options = [result["answer"]] + result["distractors"][:3]
-		random.shuffle(options)
+		rng.shuffle(options)
 
 		questions.append({
 			"id": result["id"],
@@ -105,7 +107,7 @@ async def _build_round(db, count: int):
 @router.get("/round")
 async def get_round(count: int = Query(default=10, ge=1, le=20)):
 	async with (await get_pool()).acquire() as db:
-		questions = await _build_round(db, count)
+		questions = await _build_round(db, random.Random(), count)
 		return {
 			"count": len(questions),
 			"questions": questions,
@@ -125,14 +127,14 @@ async def get_daily(count: int = Query(default=10, ge=1, le=20)):
 	daily_seed = datetime.now(timezone.utc).date().isoformat()
 	async with (await get_pool()).acquire() as db:
 		# some generators use SQL-level random() — seed Postgres's RNG on this
-		# connection too, otherwise the daily round isn't deterministic
+		# connection too, otherwise the daily round isn't deterministic. setseed is
+		# per connection, and this request holds its connection for the whole round.
 		pg_seed = int(hashlib.sha256(daily_seed.encode()).hexdigest()[:8], 16) / 0xFFFFFFFF * 2 - 1
 		await db.execute("SELECT setseed($1)", pg_seed)
-		random.seed(daily_seed)
 		try:
-			questions = await _build_round(db, count)
+			questions = await _build_round(db, random.Random(daily_seed), count)
 		finally:
-			random.seed(None)
+			# don't hand the pooled connection back with a predictable SQL random()
 			await db.execute("SELECT setseed($1)", random.uniform(-1, 1))
 		return {
 			"count": len(questions),
@@ -145,12 +147,43 @@ async def get_daily(count: int = Query(default=10, ge=1, le=20)):
 # POST /tower/score
 # ---------------------------------------------------------------------------
 
+MAX_QUESTIONS = 20         # /round and /daily cap count at 20
+MIN_POINTS_PER_Q = 10      # Tower.jsx: max(10, timeLeft / TIMER_DURATION * MAX_POINTS_PER_Q)
+MAX_POINTS_PER_Q = 100
+
+
 class ScoreSubmission(BaseModel):
+	"""Bounds and a plausibility check only; a forged but plausible score still passes.
+	Anything out of range is a 422 (before this, a huge int reached Postgres and gave a 500)."""
 	player_name: str
-	score: int
-	correct: int
-	total: int
+	score: int = Field(ge=0, le=MAX_QUESTIONS * MAX_POINTS_PER_Q)
+	correct: int = Field(ge=0, le=MAX_QUESTIONS)
+	total: int = Field(ge=1, le=MAX_QUESTIONS)
 	daily_seed: Optional[str] = None  # ISO date string e.g. "2025-05-21", null for free play
+
+	@field_validator("daily_seed")
+	@classmethod
+	def seed_is_today_or_yesterday(cls, value: Optional[str]) -> Optional[str]:
+		"""Today's UTC challenge, or yesterday's for a round finished just after midnight UTC."""
+		if value is None:
+			return None
+		try:
+			seed = date.fromisoformat(value)
+		except ValueError:
+			raise ValueError("daily_seed must be an ISO date")
+		today = datetime.now(timezone.utc).date()
+		if seed not in (today, today - timedelta(days=1)):
+			raise ValueError("daily_seed must be today's or yesterday's UTC date")
+		return value
+
+	@model_validator(mode="after")
+	def plausible(self):
+		if self.correct > self.total:
+			raise ValueError("correct can't exceed total")
+		low, high = MIN_POINTS_PER_Q * self.correct, MAX_POINTS_PER_Q * self.correct
+		if not low <= self.score <= high:
+			raise ValueError(f"score must be between {low} and {high} for {self.correct} correct")
+		return self
 
 
 def _parse_seed(value: Optional[str]) -> Optional[date]:

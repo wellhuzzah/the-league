@@ -1,6 +1,7 @@
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
+from app.params import Limit, like_escape, search_term
 
 router = APIRouter(
     prefix="/draft",
@@ -92,10 +93,9 @@ async def get_draft_tendencies():
 async def search_player_draft_history(player_name: str):
     """
     Search how many times and by whom a player has been drafted.
-    Case-insensitive partial match.
+    Case-insensitive partial match on at least 2 characters; % and _ match literally.
     """
-    if not player_name.strip():
-        raise HTTPException(status_code=404, detail="Player not found")
+    term = search_term(player_name)
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -112,7 +112,7 @@ async def search_player_draft_history(player_name: str):
             JOIN teams t ON dp.team_id = t.team_id
             WHERE dp.player_name ILIKE $1
             ORDER BY dp.season, dp.overall_pick
-        """, f"%{player_name}%")
+        """, f"%{like_escape(term)}%")
 
         if not rows:
             return {"query": player_name, "results": [], "times_drafted": 0}
@@ -138,7 +138,7 @@ async def search_player_draft_history(player_name: str):
 
 
 @router.get("/value/history")
-async def get_value_history(limit: int = 25):
+async def get_value_history(limit: int = Limit(25)):
     """All-time best steals and busts across every draft season."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
@@ -157,7 +157,8 @@ async def get_value_history(limit: int = 25):
             JOIN teams t ON dp.team_id = t.team_id
             LEFT JOIN (box_scores bs
                        JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
-                ON bs.player_name = dp.player_name
+                -- by id, not name: names collide (2010 has two drafted Mike Williamses)
+                ON bs.espn_player_id = dp.espn_player_id
                AND bs.season = dp.season
                AND bs.is_starter = TRUE
             GROUP BY dp.season, dp.player_name, dp.position, dp.overall_pick,
@@ -186,9 +187,9 @@ async def get_value_history(limit: int = 25):
                 [p for p in season_picks if p["season_points"] > 0],
                 key=lambda p: p["season_points"], reverse=True
             )
-            rank_map = {p["player_name"]: i + 1 for i, p in enumerate(scored)}
+            rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
             for p in season_picks:
-                p["scoring_rank"] = rank_map.get(p["player_name"], len(season_picks) + 1)
+                p["scoring_rank"] = rank_map.get(p["overall_pick"], len(season_picks) + 1)
                 p["value_gap"]    = p["overall_pick"] - p["scoring_rank"]
             all_picks.extend(season_picks)
 
@@ -339,7 +340,8 @@ async def get_draft_value(year: int):
             JOIN teams t ON dp.team_id = t.team_id
             LEFT JOIN (box_scores bs
                        JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
-                ON bs.player_name = dp.player_name
+                -- by id, not name: names collide (2010 has two drafted Mike Williamses)
+                ON bs.espn_player_id = dp.espn_player_id
                AND bs.season = dp.season
                AND bs.is_starter = TRUE
             WHERE dp.season = $1
@@ -370,10 +372,10 @@ async def get_draft_value(year: int):
             [p for p in picks if p["season_points"] > 0],
             key=lambda p: p["season_points"], reverse=True
         )
-        rank_map = {p["player_name"]: i + 1 for i, p in enumerate(scored)}
+        rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
 
         for p in picks:
-            p["scoring_rank"] = rank_map.get(p["player_name"], len(picks) + 1)
+            p["scoring_rank"] = rank_map.get(p["overall_pick"], len(picks) + 1)
             p["value_gap"]    = p["overall_pick"] - p["scoring_rank"]
 
         steal = max(scored, key=lambda p: p["value_gap"]) if scored else None

@@ -1,6 +1,7 @@
 import json
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
+from app.params import Limit, like_escape, search_term
 
 router = APIRouter(
 	prefix="/transactions",
@@ -223,10 +224,12 @@ async def get_player_transactions(player_name: str, exact: bool = True):
 
 	exact=true (default): the name is matched exactly, case-insensitively, against transaction and
 	box score names and resolved to ESPN player ids; every transaction for those ids is returned,
-	whatever name ESPN used at the time. exact=false: case-insensitive partial match on the name.
+	whatever name ESPN used at the time. exact=false: case-insensitive partial match on the name
+	(% and _ match literally). Either way the name needs at least 2 characters.
 	Each row keeps the name as recorded. If a name resolves to more than one player, all are
 	returned and listed in "players"; rows carry espn_player_id to tell them apart.
 	"""
+	term = search_term(player_name)
 	async with (await get_pool()).acquire() as db:
 		if exact:
 			ids = [r["espn_player_id"] for r in await db.fetch("""
@@ -234,10 +237,10 @@ async def get_player_transactions(player_name: str, exact: bool = True):
 				UNION
 				SELECT espn_player_id FROM box_scores WHERE lower(player_name) = lower($1)
 				ORDER BY espn_player_id
-			""", player_name)]
+			""", term)]
 			match, arg = "i.espn_player_id = ANY($1::int[])", ids
 		else:
-			match, arg = "i.player_name ILIKE $1", f"%{player_name}%"
+			match, arg = "i.player_name ILIKE $1", f"%{like_escape(term)}%"
 
 		rows = await db.fetch(f"""
 			SELECT
@@ -276,7 +279,7 @@ async def get_player_transactions(player_name: str, exact: bool = True):
 
 
 @router.get("/records/biggest-bids")
-async def get_biggest_bids(limit: int = 25, season: int = None):
+async def get_biggest_bids(limit: int = Limit(25), season: int = None):
 	"""Top winning (EXECUTED) WAIVER bids."""
 	async with (await get_pool()).acquire() as db:
 		rows = await db.fetch(f"""
@@ -301,7 +304,7 @@ async def get_biggest_bids(limit: int = 25, season: int = None):
 
 
 @router.get("/records/biggest-losing-bids")
-async def get_biggest_losing_bids(limit: int = 25, season: int = None):
+async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 	"""Top outbid (FAILED_INVALIDPLAYERSOURCE) WAIVER bids, with who won the player in that run.
 	Other failures (e.g. FAILED_PLAYERALREADYDROPPED) were not outbid and are left out."""
 	async with (await get_pool()).acquire() as db:
@@ -332,7 +335,7 @@ async def get_biggest_losing_bids(limit: int = 25, season: int = None):
 
 
 @router.get("/records/biggest-overpays")
-async def get_biggest_overpays(limit: int = 25, season: int = None):
+async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 	"""Winning WAIVER bid minus the highest outbid (FAILED_INVALIDPLAYERSOURCE) bid from a different
 	team on the same player in the same run. No competing bid counts as a runner-up of 0."""
 	async with (await get_pool()).acquire() as db:
@@ -391,7 +394,7 @@ _BARGAIN_SORTS = {
 
 @router.get("/records/bargains")
 async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
-                       season: int = None, limit: int = 25):
+                       season: int = None, limit: int = Limit(25)):
 	"""Best pickups: EXECUTED WAIVER or FREEAGENT adds, paid (bid > 0) or free (bid = 0).
 
 	Stint: from the pickup's week to the end of that season, or to the week before the
@@ -465,7 +468,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 
 
 @router.get("/records/most-contested")
-async def get_most_contested(limit: int = 25, season: int = None):
+async def get_most_contested(limit: int = Limit(25), season: int = None):
 	"""Players claimed by the most distinct teams in a single waiver run. Counts the winning claim and
 	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out."""
 	async with (await get_pool()).acquire() as db:
