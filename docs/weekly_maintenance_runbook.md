@@ -96,6 +96,25 @@ If ESPN shows a FAAB transfer the feed never will (e.g. the feed was lost), conf
 
 Don't add a trade the feed already shows; it would be counted twice and fail.
 
+## Backup step (`nightly_backup.py --push`)
+
+Runs every week, in or out of season, after the imports: a fresh dump, then a redacted plain-SQL copy
+committed to `rockwood-archive` as `db/rockwood.sql` (only when the data changed). The nightly task
+(*Rockwood Nightly Backup*, 03:30) does the same without the push. Details: `logs\nightly_backup.log`.
+
+| Log line | Meaning | Check |
+|---|---|---|
+| `exit=1` / `dump FAIL` | pg_dump failed, or the dump lacked a required table | `BACKUP_DATABASE_URL` in `.env`; Postgres running; D: present and not full. Earlier dumps are untouched. |
+| `exit=2` / `espn_raw FAIL` | robocopy returned 8+ | D: missing or full. |
+| `exit=8` / `push FAIL` | Git or the secret scan failed | Git auth as for the feed step. `secret scan: … contains the value of X` = a `.env` value is in the database: find the row, don't push. The next run retries. |
+
+## Analyze step
+
+`SELECT rockwood_analyze()` refreshes planner statistics. `rockwood_writer` can't ANALYZE tables it
+doesn't own on PG 16, so the function (owned by `postgres`, SECURITY DEFINER) does it, and only
+`rockwood_writer` may call it. `analyze FAIL … permission denied for function` = the grant was lost;
+`function rockwood_analyze() does not exist` = it was dropped. See `docs/rockwood_reference.md`.
+
 ## Notifications
 
 `NOTIFY_WEBHOOK_URL` gets a message when a step fails or when no run has fully succeeded in 8 days, and a

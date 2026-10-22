@@ -6,6 +6,9 @@ Steps, in order, each independent (a failure is logged and the next step still r
 	feed     activity_feed_archive.py (snapshot + D: copy + GitHub push)
 	scores   espn_import.py --season S             (matchups, box_scores, draft_picks)
 	waivers  espn_transactions_import.py --season S (transactions, transaction_items)
+	backup   nightly_backup.py --push   (fresh pg_dump; redacted SQL copy to rockwood-archive)
+	analyze  SELECT rockwood_analyze()  (planner statistics; the function runs ANALYZE as its
+	         owner, postgres, since rockwood_writer can't ANALYZE tables it doesn't own on PG 16)
 
 Each import first runs with --dry-run; its output is checked against guardrails (below) and the
 database, and only if every check passes does the live run happen. A tripped guardrail means
@@ -25,7 +28,7 @@ One line per step per run goes to weekly_maintenance.log (gitignored). Each step
 kept in maintenance_output/ (gitignored) for when a guardrail trips.
 
 Exit code: 0 if every step passed or was skipped; otherwise the sum of 1 (feed), 2 (scores),
-4 (waivers) for the steps that failed.
+4 (waivers), 8 (backup), 16 (analyze) for the steps that failed.
 
 Notifications (optional, set in .env; nothing is sent when unset):
 	NOTIFY_WEBHOOK_URL  Discord or Slack incoming webhook (or an ntfy topic URL). Posted when a
@@ -67,7 +70,7 @@ from espn_raw import RAW_DIR, load_archived  # noqa: E402
 PYTHON = sys.executable
 LOG = os.path.join(HERE, "weekly_maintenance.log")
 OUTPUT_DIR = os.path.join(HERE, "maintenance_output")
-STEP_BITS = {"feed": 1, "scores": 2, "waivers": 4}
+STEP_BITS = {"feed": 1, "scores": 2, "waivers": 4, "backup": 8, "analyze": 16}
 
 REG_SEASON_WEEKS = 13          # weeks 14+ are playoffs (matches espn_import.py)
 STARTERS_PER_TEAM = 9
@@ -530,6 +533,22 @@ def step_waivers(season, accept):
 	return True
 
 
+def step_backup():
+	code, out = run("backup", "run", ["nightly_backup.py", "--push"])
+	if code:
+		log("backup", "FAIL", f"exit={code}: {last_line(out)}")
+		return False
+	push = next((l for l in out.splitlines() if " push " in l), last_line(out))
+	log("backup", "ok", push.split(" ok ", 1)[-1].strip()[:200])
+	return True
+
+
+def step_analyze():
+	query("SELECT rockwood_analyze()")
+	log("analyze", "ok", "planner statistics refreshed")
+	return True
+
+
 # --------------------------------------------------------------------------- #
 # notification
 # --------------------------------------------------------------------------- #
@@ -598,6 +617,7 @@ def main():
 	else:
 		log("scores", "skip", f"off-season ({season} season)")
 		log("waivers", "skip", f"off-season ({season} season)")
+	steps += [("backup", step_backup), ("analyze", step_analyze)]    # analyze stays last
 	for name, fn in steps:
 		try:
 			ok = fn()
