@@ -11,21 +11,24 @@ Steps, each independent (a failure is reported and the next step still runs):
 	          files in DUMP_DIR (e.g. one-off *_preaudit.dump) are never touched.
 	espn_raw  robocopy /E of espn_raw/ to RAW_BACKUP: incremental, and never deletes at the
 	          destination, so an accidental delete on C: can't propagate to the copy.
+	docs      the same for docs/ (gitignored reports, audits, runbooks) to DOCS_BACKUP.
 	logs      keeps the newest KEEP_API_LOGS rotated logs/api-*.log (NSSM rotates api.log at 10 MB).
 	push      --push only: writes the dump as plain SQL to the private rockwood-archive repo as
-	          db/rockwood.sql (one file, overwritten) and commits it only when it changed. Plain SQL
-	          because git stores each week as a small delta (a binary -Fc dump would add ~1 MB of
-	          history every week), and because it can be redacted: the account SWID is a member id in
-	          espn_team_map, so it is replaced with activity_feed_archive's SWID_PLACEHOLDER (put the
-	          real SWID back before restoring), and the file is scanned for every .env value before
-	          commit. Git uses the user's credentials, so weekly_maintenance runs this step, not the
-	          nightly task.
+	          db/rockwood.sql (one file, overwritten) and mirrors docs/ to the repo's docs/, then
+	          commits only what changed. Plain SQL because git stores each week as a small delta (a
+	          binary -Fc dump would add ~1 MB of history every week), and because it can be redacted:
+	          the account SWID is a member id in espn_team_map, so it is replaced with
+	          activity_feed_archive's SWID_PLACEHOLDER (put the real SWID back before restoring).
+	          The SQL and every docs file are scanned for every .env value first; a hit stops the
+	          step before anything is written to the repo. Git uses the user's credentials, so
+	          weekly_maintenance runs this step, not the nightly task.
 
 Failure alert: NOTIFY_WEBHOOK_URL (the Discord hook weekly_maintenance uses) gets the failed steps.
 BACKUP_HEALTHCHECK_URL (optional, a separate daily healthchecks.io check) is pinged on success and
 /fail on failure. HEALTHCHECK_URL is weekly_maintenance's weekly check and is never pinged here.
 
-One line per run goes to logs/nightly_backup.log. Exit code: sum of 1 dump, 2 espn_raw, 4 logs, 8 push.
+One line per run goes to logs/nightly_backup.log. Exit code: sum of 1 dump, 2 espn_raw, 4 logs, 8 push,
+16 docs.
 """
 
 import argparse
@@ -52,15 +55,18 @@ DUMP_DIR = r"D:\Backup\rockwood\db"
 MONTHLY_DIR = os.path.join(DUMP_DIR, "monthly")
 RAW_DIR = os.path.join(HERE, "espn_raw")
 RAW_BACKUP = r"D:\Backup\rockwood\espn_raw"
+DOCS_DIR = os.path.join(HERE, "docs")
+DOCS_BACKUP = r"D:\Backup\rockwood\docs"
 LOG_DIR = os.path.join(HERE, "logs")
 LOG = os.path.join(LOG_DIR, "nightly_backup.log")
 ARCHIVE_SQL = "db/rockwood.sql"
+ARCHIVE_DOCS = "docs"
 KEEP_DAILY = 14
 KEEP_MONTHLY = 12
 KEEP_API_LOGS = 10
 REQUIRED_TABLES = ("box_scores", "draft_picks", "espn_team_map", "matchups", "records", "teams",
                    "tower_scores", "transaction_items", "transactions")
-STEP_BITS = {"dump": 1, "espn_raw": 2, "logs": 4, "push": 8}
+STEP_BITS = {"dump": 1, "espn_raw": 2, "logs": 4, "push": 8, "docs": 16}
 RUN_LINES = []
 
 
@@ -116,13 +122,14 @@ def step_dump(today):
 	return final
 
 
-def step_espn_raw():
-	r = subprocess.run(["robocopy", RAW_DIR, RAW_BACKUP, "/E", "/XJ", "/R:2", "/W:5",
+def robocopy(step, src, dst):
+	"""Incremental copy that never deletes at the destination (/E, not /MIR)."""
+	r = subprocess.run(["robocopy", src, dst, "/E", "/XJ", "/R:2", "/W:5",
 	                    "/NP", "/NFL", "/NDL", "/NJH"], capture_output=True, text=True, timeout=3600)
 	if r.returncode >= 8:    # robocopy: 0-7 success, 8+ failure
 		raise RuntimeError(f"robocopy exit {r.returncode}: {r.stdout.strip()[-200:]}")
 	files = re.search(r"Files :\s+(\d+)\s+(\d+)", r.stdout)
-	log("espn_raw", "ok", f"robocopy exit {r.returncode}" + (f" | {files.group(2)} of {files.group(1)} files copied" if files else ""))
+	log(step, "ok", f"robocopy exit {r.returncode}" + (f" | {files.group(2)} of {files.group(1)} files copied" if files else ""))
 
 
 def step_logs():
@@ -140,16 +147,32 @@ def step_push(dump):
 	leaked = [k for k, p in pats.items() if p.search(text)]
 	if leaked:
 		raise RuntimeError(f"secret scan: dump contains the value of {leaked}; nothing committed")
+	# docs are copied as they are (no redaction), so any hit stops the step before the repo is touched
+	for root, _, files in os.walk(DOCS_DIR):
+		for name in files:
+			path = os.path.join(root, name)
+			with open(path, encoding="utf-8", errors="replace") as f:
+				doc = f.read()
+			leaked = [k for k, p in pats.items() if p.search(doc)]
+			if leaked:
+				raise RuntimeError(f"secret scan: {os.path.relpath(path, HERE)} contains the value of {leaked}; nothing committed")
+
 	target = os.path.join(ARCHIVE_REPO, ARCHIVE_SQL)
 	os.makedirs(os.path.dirname(target), exist_ok=True)
 	with open(target, "w", encoding="utf-8", newline="\n") as f:
 		f.write(text)
-	git("add", ARCHIVE_SQL)
-	changed = bool(git("diff", "--cached", "--name-only").strip())
-	if changed:
-		git("commit", "-q", "-m", f"db dump {os.path.basename(dump)}")
+	docs_target = os.path.join(ARCHIVE_REPO, ARCHIVE_DOCS)
+	shutil.rmtree(docs_target, ignore_errors=True)    # mirror: docs deleted locally go from the repo too
+	shutil.copytree(DOCS_DIR, docs_target)
+	git("add", "-A", ARCHIVE_SQL, ARCHIVE_DOCS)
+	staged = [p for p in git("diff", "--cached", "--name-only").splitlines() if p]
+	if staged:
+		n_docs = sum(p.startswith(ARCHIVE_DOCS + "/") for p in staged)
+		what = " + ".join(filter(None, [f"db dump {os.path.basename(dump)}" if ARCHIVE_SQL in staged else "",
+		                                f"{n_docs} docs file(s)" if n_docs else ""]))
+		git("commit", "-q", "-m", f"weekly backup: {what}")
 	git("push", "-q", "origin", "HEAD")    # every run, so a commit from a failed push gets retried
-	log("push", "ok", f"committed {ARCHIVE_SQL} from {os.path.basename(dump)}" if changed else "data unchanged, nothing committed")
+	log("push", "ok", f"committed {what}" if staged else "dump and docs unchanged, nothing committed")
 
 
 # --------------------------------------------------------------------------- #
@@ -174,8 +197,8 @@ def notify(failed):
 
 
 def main():
-	ap = argparse.ArgumentParser(description="Nightly pg_dump, espn_raw copy and log housekeeping.")
-	ap.add_argument("--push", action="store_true", help="also commit the dump to rockwood-archive (weekly)")
+	ap = argparse.ArgumentParser(description="Nightly pg_dump, espn_raw and docs copies, log housekeeping.")
+	ap.add_argument("--push", action="store_true", help="also commit the dump and docs to rockwood-archive (weekly)")
 	push = ap.parse_args().push
 
 	today = datetime.now().date()
@@ -185,7 +208,10 @@ def main():
 	except Exception as e:
 		log("dump", "FAIL", f"{type(e).__name__}: {e}"[:300])
 		failed.append("dump")
-	for name, fn in (("espn_raw", step_espn_raw), ("logs", step_logs)):
+	steps = (("espn_raw", lambda: robocopy("espn_raw", RAW_DIR, RAW_BACKUP)),
+	         ("docs", lambda: robocopy("docs", DOCS_DIR, DOCS_BACKUP)),
+	         ("logs", step_logs))
+	for name, fn in steps:
 		try:
 			fn()
 		except Exception as e:    # a crash in one step never stops the next

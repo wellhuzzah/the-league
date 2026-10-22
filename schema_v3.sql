@@ -24,7 +24,7 @@ ALTER TABLE box_scores ADD CONSTRAINT box_scores_starter_from_slot
 	CHECK (is_starter = (lineup_slot NOT IN (20, 21)));
 
 -- ===========================================================================
--- 2. transactions + transaction_items   (PENDING — not applied yet)
+-- 2. transactions + transaction_items   (applied October 2026; live tables checked against this 2026-10-22)
 -- ===========================================================================
 -- One row per ESPN transaction (WAIVER, FREEAGENT, or ROSTER with a DROP), and
 -- one row per player moved in it. Loaded by espn_transactions_import.py.

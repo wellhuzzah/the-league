@@ -99,14 +99,16 @@ Don't add a trade the feed already shows; it would be counted twice and fail.
 ## Backup step (`nightly_backup.py --push`)
 
 Runs every week, in or out of season, after the imports: a fresh dump, then a redacted plain-SQL copy
-committed to `rockwood-archive` as `db/rockwood.sql` (only when the data changed). The nightly task
-(*Rockwood Nightly Backup*, 03:30) does the same without the push. Details: `logs\nightly_backup.log`.
+committed to `rockwood-archive` as `db/rockwood.sql`, plus a mirror of `docs\` as `docs/` (committed only
+when something changed). The nightly task (*Rockwood Nightly Backup*, 03:30) does the same without the
+push, and also copies `docs\` to `D:\Backup\rockwood\docs`. Details: `logs\nightly_backup.log`.
 
 | Log line | Meaning | Check |
 |---|---|---|
 | `exit=1` / `dump FAIL` | pg_dump failed, or the dump lacked a required table | `BACKUP_DATABASE_URL` in `.env`; Postgres running; D: present and not full. Earlier dumps are untouched. |
 | `exit=2` / `espn_raw FAIL` | robocopy returned 8+ | D: missing or full. |
-| `exit=8` / `push FAIL` | Git or the secret scan failed | Git auth as for the feed step. `secret scan: … contains the value of X` = a `.env` value is in the database: find the row, don't push. The next run retries. |
+| `exit=8` / `push FAIL` | Git or the secret scan failed | Git auth as for the feed step. `secret scan: dump contains the value of X` = a `.env` value is in the database: find the row, don't push. `secret scan: docs\… contains …` = a `.env` value in a docs file: remove it. `paths are ignored` = something new written to `rockwood-archive` that its allowlist `.gitignore` doesn't list. The next run retries. |
+| `exit=16` / `docs FAIL` | robocopy of `docs\` to D: returned 8+ | D: missing or full. |
 
 ## Analyze step
 
