@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from app.database import get_pool
+from app.database import concurrently, get_pool
 
 router = APIRouter(
     prefix="/seasons",
@@ -12,21 +12,17 @@ router = APIRouter(
 # regular-season matchups and nothing is written back.
 IN_PROGRESS_STANDINGS = """
     WITH games AS (
-        SELECT m.home_team_id AS team_id, m.home_score AS pf, m.away_score AS pa,
-               m.winner_team_id AS winner, m.week
-        FROM matchups m WHERE m.season = $1 AND NOT m.is_playoffs
-              AND m.home_score IS NOT NULL AND m.away_score IS NOT NULL
-        UNION ALL
-        SELECT m.away_team_id, m.away_score, m.home_score, m.winner_team_id, m.week
-        FROM matchups m WHERE m.season = $1 AND NOT m.is_playoffs
-              AND m.home_score IS NOT NULL AND m.away_score IS NOT NULL
+        SELECT tg.team_id, tg.score AS pf, tg.opp_score AS pa, tg.result, tg.week
+        FROM team_games tg
+        WHERE tg.season = $1 AND NOT tg.is_playoffs
+          AND tg.score IS NOT NULL AND tg.opp_score IS NOT NULL
     )
     SELECT
         t.team_id,
         t.owner,
-        COUNT(*) FILTER (WHERE g.winner = g.team_id)                            AS wins,
-        COUNT(*) FILTER (WHERE g.winner IS NOT NULL AND g.winner <> g.team_id)  AS losses,
-        COUNT(*) FILTER (WHERE g.team_id IS NOT NULL AND g.winner IS NULL)      AS draws,
+        COUNT(*) FILTER (WHERE g.result = 'W')                                  AS wins,
+        COUNT(*) FILTER (WHERE g.result = 'L')                                  AS losses,
+        COUNT(*) FILTER (WHERE g.result = 'T')                                  AS draws,
         COALESCE(SUM(g.pf), 0)                                                  AS points_for,
         COALESCE(SUM(g.pa), 0)                                                  AS points_against,
         COUNT(g.team_id)                                                        AS games_played,
@@ -37,6 +33,46 @@ IN_PROGRESS_STANDINGS = """
     WHERE etm.season = $1
     GROUP BY t.team_id, t.owner
 """
+
+# Luck for every season in one pass (audit Q7): "beaten" is how many scores that week were lower
+# (rank - 1). Expected wins keep the original formula exactly, beaten / (beaten - 1) per week, NULL
+# when beaten = 1, so the numbers on the site don't change. (That is not "share of the league
+# beaten"; see the audit's Phase 3 notes.) Ties in luck: more actual wins first, then owner (the
+# old query left ties to the plan; this order matches it in 3 of the 4 tied pairs on record).
+LUCK_SQL = """
+    WITH weekly AS (
+        SELECT tg.season, tg.week, tg.team_id, t.owner,
+               CASE WHEN tg.result = 'W' THEN 1 ELSE 0 END                     AS actual_win,
+               rank() OVER (PARTITION BY tg.season, tg.week ORDER BY tg.score) - 1 AS beaten
+        FROM team_games tg
+        JOIN teams t ON t.team_id = tg.team_id
+        WHERE NOT tg.is_playoffs {where}
+    )
+    SELECT
+        season,
+        team_id,
+        owner,
+        SUM(actual_win)                                                         AS actual_wins,
+        ROUND(SUM(beaten::float / NULLIF(beaten - 1, 0))::numeric, 2)           AS expected_wins,
+        ROUND((SUM(actual_win) - SUM(beaten::float / NULLIF(beaten - 1, 0)))::numeric, 2) AS luck
+    FROM weekly
+    GROUP BY season, team_id, owner
+    ORDER BY season DESC, luck DESC, actual_wins DESC, owner
+"""
+
+
+def luck_entry(row):
+    return {"team_id": row["team_id"], "owner": row["owner"], "actual_wins": row["actual_wins"],
+            "expected_wins": row["expected_wins"], "luck": row["luck"]}
+
+
+async def season_luck(db, year):
+    return [luck_entry(r) for r in await db.fetch(LUCK_SQL.format(where="AND tg.season = $1"), year)]
+
+
+async def all_luck(db):
+    """Luck rows for every season, newest first, each season ordered by luck."""
+    return await db.fetch(LUCK_SQL.format(where=""))
 
 
 def rank_in_progress(rows):
@@ -108,153 +144,103 @@ async def get_seasons():
         return sorted(seasons, key=lambda s: s["season"], reverse=True)
 
 
-@router.get("/{year}/standings")
-async def get_standings(year: int):
-    """Full standings for a season. A finished season reads records; an in-progress one (no
-    records rows) is computed from its regular-season matchups and flagged in_progress, with
-    final_standing as the current place and championship/sacko/most_points left false."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                t.team_id,
-                t.owner,
-                r.wins,
-                r.losses,
-                r.draws,
-                r.points_for,
-                r.points_against,
-                r.final_standing,
-                r.championship,
-                r.sacko,
-                r.most_points
-            FROM records r
-            JOIN teams t ON r.team_id = t.team_id
-            WHERE r.season = $1
-            ORDER BY r.final_standing
-        """, year)
-        if not rows:
-            live = await db.fetch(IN_PROGRESS_STANDINGS, year)
-            if not live or not any(r["games_played"] for r in live):
-                raise HTTPException(status_code=404, detail="Season not found")
-            return rank_in_progress(live)
-        return [
-            {
-                **dict(row),
-                "points_for":     float(row["points_for"]),
-                "points_against": float(row["points_against"]),
-                "in_progress":    False,
-            }
-            for row in rows
-        ]
-
-
-@router.get("/{year}/weekly-scores")
-async def get_weekly_scores(year: int):
-    """Every team's score for every week in a season — useful for charts."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                m.week,
-                m.is_playoffs,
-                t.owner,
-                t.team_id,
-                CASE WHEN m.home_team_id = t.team_id
-                     THEN m.home_score ELSE m.away_score END        AS score,
-                CASE WHEN m.winner_team_id = t.team_id THEN true
-                     WHEN m.winner_team_id IS NULL THEN NULL
-                     ELSE false END                                  AS won
-            FROM matchups m
-            JOIN teams t ON t.team_id IN (m.home_team_id, m.away_team_id)
-            WHERE m.season = $1
-            ORDER BY m.week, t.owner
-        """, year)
-        if not rows:
-            raise HTTPException(status_code=404, detail="Season not found")
-        return [
-            {**dict(row), "score": float(row["score"])}
-            for row in rows
-        ]
-
-
-@router.get("/{year}/luck")
-async def get_season_luck(year: int):
-    """
-    Luck index for a season — compares actual wins to expected wins
-    based on points scored vs rest of league each week.
-    A team is 'lucky' if they won games they could have lost against
-    the rest of the field.
-    """
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            WITH weekly_scores AS (
-                SELECT
-                    m.week,
-                    t.team_id,
-                    t.owner,
-                    CASE WHEN m.home_team_id = t.team_id
-                         THEN m.home_score ELSE m.away_score END    AS score,
-                    CASE WHEN m.winner_team_id = t.team_id THEN 1
-                         WHEN m.winner_team_id IS NULL THEN 0
-                         ELSE 0 END                                  AS actual_win
-                FROM matchups m
-                JOIN teams t ON t.team_id IN (m.home_team_id, m.away_team_id)
-                WHERE m.season = $1 AND m.is_playoffs = FALSE
-            ),
-            expected AS (
-                SELECT
-                    ws.team_id,
-                    ws.owner,
-                    ws.week,
-                    ws.score,
-                    ws.actual_win,
-                    -- Expected wins: fraction of other teams this score would beat
-                    (
-                        SELECT COUNT(*)::float / NULLIF(COUNT(*) - 1, 0)
-                        FROM weekly_scores ws2
-                        WHERE ws2.week = ws.week AND ws2.score < ws.score
-                    )                                               AS expected_win_frac
-                FROM weekly_scores ws
-            )
-            SELECT
-                team_id,
-                owner,
-                SUM(actual_win)                                     AS actual_wins,
-                ROUND(SUM(expected_win_frac)::numeric, 2)           AS expected_wins,
-                ROUND((SUM(actual_win) - SUM(expected_win_frac))::numeric, 2) AS luck
-            FROM expected
-            GROUP BY team_id, owner
-            ORDER BY luck DESC
-        """, year)
-        if not rows:
-            raise HTTPException(status_code=404, detail="Season not found")
-        return [dict(row) for row in rows]
-
-
-@router.get("/{year}/top-scorer")
-async def get_season_top_scorer(year: int):
-    """Highest-scoring individual player (starters only, regular season) for the season."""
-    async with (await get_pool()).acquire() as db:
-        row = await db.fetchrow("""
-            SELECT
-                bs.player_name,
-                bs.position,
-                t.owner,
-                SUM(bs.points_scored) AS total_points
-            FROM box_scores bs
-            JOIN teams t ON bs.team_id = t.team_id
-            JOIN matchups m ON bs.matchup_id = m.id
-            WHERE bs.season = $1
-              AND bs.is_starter = TRUE
-              AND NOT m.is_playoffs
-            GROUP BY bs.player_name, bs.position, t.owner
-            ORDER BY total_points DESC, bs.player_name, bs.position, t.owner
-            LIMIT 1
-        """, year)
-        if not row:
-            raise HTTPException(status_code=404, detail="No scorer data for this season")
-        return {
-            "player_name":  row["player_name"],
-            "position":     row["position"],
-            "owner":        row["owner"],
-            "total_points": float(row["total_points"]),
+async def season_standings(db, year):
+    """A finished season reads records; an in-progress one (no records rows) is computed from its
+    regular-season matchups and flagged in_progress, with final_standing as the current place and
+    championship/sacko/most_points left false. [] when the season has neither."""
+    rows = await db.fetch("""
+        SELECT
+            t.team_id,
+            t.owner,
+            r.wins,
+            r.losses,
+            r.draws,
+            r.points_for,
+            r.points_against,
+            r.final_standing,
+            r.championship,
+            r.sacko,
+            r.most_points
+        FROM records r
+        JOIN teams t ON r.team_id = t.team_id
+        WHERE r.season = $1
+        ORDER BY r.final_standing
+    """, year)
+    if not rows:
+        live = await db.fetch(IN_PROGRESS_STANDINGS, year)
+        if not live or not any(r["games_played"] for r in live):
+            return []
+        return rank_in_progress(live)
+    return [
+        {
+            **dict(row),
+            "points_for":     float(row["points_for"]),
+            "points_against": float(row["points_against"]),
+            "in_progress":    False,
         }
+        for row in rows
+    ]
+
+
+async def weekly_scores(db, year):
+    """Every team's score for every week in a season."""
+    rows = await db.fetch("""
+        SELECT
+            tg.week,
+            tg.is_playoffs,
+            t.owner,
+            t.team_id,
+            tg.score,
+            CASE tg.result WHEN 'W' THEN true WHEN 'L' THEN false END       AS won
+        FROM team_games tg
+        JOIN teams t ON t.team_id = tg.team_id
+        WHERE tg.season = $1
+        ORDER BY tg.week, t.owner
+    """, year)
+    return [{**dict(row), "score": float(row["score"])} for row in rows]
+
+
+async def top_scorer(db, year):
+    """Highest-scoring individual player (starters only, regular season), or None before box
+    scores (2018)."""
+    row = await db.fetchrow("""
+        SELECT
+            bs.player_name,
+            bs.position,
+            t.owner,
+            SUM(bs.points_scored) AS total_points
+        FROM box_scores bs
+        JOIN teams t ON bs.team_id = t.team_id
+        JOIN matchups m ON bs.matchup_id = m.id
+        WHERE bs.season = $1
+          AND bs.is_starter = TRUE
+          AND NOT m.is_playoffs
+        GROUP BY bs.player_name, bs.position, t.owner
+        ORDER BY total_points DESC, bs.player_name, bs.position, t.owner
+        LIMIT 1
+    """, year)
+    if not row:
+        return None
+    return {
+        "player_name":  row["player_name"],
+        "position":     row["position"],
+        "owner":        row["owner"],
+        "total_points": float(row["total_points"]),
+    }
+
+
+@router.get("/{year}")
+async def get_season(year: int):
+    """Everything the Season page shows, in one call: standings, every team's weekly scores, the
+    luck table and the top scorer. A part with no data is [] (or null for top_scorer); 404 only
+    when the season has nothing at all."""
+    standings, weekly, luck, scorer = await concurrently(
+        lambda db: season_standings(db, year),
+        lambda db: weekly_scores(db, year),
+        lambda db: season_luck(db, year),
+        lambda db: top_scorer(db, year),
+    )
+    if not (standings or weekly or luck or scorer):
+        raise HTTPException(status_code=404, detail="Season not found")
+    return {"season": year, "standings": standings, "weekly_scores": weekly, "luck": luck,
+            "top_scorer": scorer}

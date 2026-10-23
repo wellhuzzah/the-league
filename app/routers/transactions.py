@@ -1,7 +1,7 @@
 import json
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
-from app.params import Limit, like_escape, search_term
+from app.params import Limit
 
 router = APIRouter(
 	prefix="/transactions",
@@ -218,64 +218,38 @@ async def get_team_transactions(team_id: int):
 		}
 
 
-@router.get("/player/{player_name:path}")
-async def get_player_transactions(player_name: str, exact: bool = True):
-	"""Every executed add and drop of a player across seasons.
-
-	exact=true (default): the name is matched exactly, case-insensitively, against transaction and
-	box score names and resolved to ESPN player ids; every transaction for those ids is returned,
-	whatever name ESPN used at the time. exact=false: case-insensitive partial match on the name
-	(% and _ match literally). Either way the name needs at least 2 characters.
-	Each row keeps the name as recorded. If a name resolves to more than one player, all are
-	returned and listed in "players"; rows carry espn_player_id to tell them apart.
-	"""
-	term = search_term(player_name)
-	async with (await get_pool()).acquire() as db:
-		if exact:
-			ids = [r["espn_player_id"] for r in await db.fetch("""
-				SELECT espn_player_id FROM transaction_items WHERE lower(player_name) = lower($1)
-				UNION
-				SELECT espn_player_id FROM box_scores WHERE lower(player_name) = lower($1)
-				ORDER BY espn_player_id
-			""", term)]
-			match, arg = "i.espn_player_id = ANY($1::int[])", ids
-		else:
-			match, arg = "i.player_name ILIKE $1", f"%{like_escape(term)}%"
-
-		rows = await db.fetch(f"""
-			SELECT
-				t.season,
-				t.week,
-				{EVENT_AT}       AS event_at,
-				t.type,
-				i.item_type,
-				i.espn_player_id,
-				i.player_name,
-				i.position,
-				tm.owner,
-				tm.team_id,
-				CASE WHEN i.item_type = 'ADD' THEN t.bid_amount END AS bid_amount
-			FROM transaction_items i
-			JOIN transactions t ON t.id = i.transaction_id
-			JOIN teams tm       ON tm.team_id = t.team_id
-			WHERE {match}
-			  AND t.status = 'EXECUTED'
-			ORDER BY {EVENT_AT}, t.id, i.item_type
-		""", arg)
-
-		names = {}
-		for r in rows:
-			names.setdefault(r["espn_player_id"], set()).add(r["player_name"])
-		player_ids = ids if exact else sorted(names)
-
-		return {
-			"query":         player_name,
-			"exact":         exact,
-			"players":       [{"espn_player_id": pid, "names": sorted(names.get(pid, ()))} for pid in player_ids],
-			"times_added":   sum(1 for r in rows if r["item_type"] == "ADD"),
-			"times_dropped": sum(1 for r in rows if r["item_type"] == "DROP"),
-			"results":       [dict(row) for row in rows],
-		}
+async def player_transactions(db, espn_player_id, label):
+	"""Every executed add and drop of one player across seasons, whatever name ESPN used at the
+	time (each row keeps the name as recorded). Served inside /players/{espn_player_id}."""
+	rows = await db.fetch(f"""
+		SELECT
+			t.season,
+			t.week,
+			{EVENT_AT}       AS event_at,
+			t.type,
+			i.item_type,
+			i.espn_player_id,
+			i.player_name,
+			i.position,
+			tm.owner,
+			tm.team_id,
+			CASE WHEN i.item_type = 'ADD' THEN t.bid_amount END AS bid_amount
+		FROM transaction_items i
+		JOIN transactions t ON t.id = i.transaction_id
+		JOIN teams tm       ON tm.team_id = t.team_id
+		WHERE i.espn_player_id = $1
+		  AND t.status = 'EXECUTED'
+		ORDER BY {EVENT_AT}, t.id, i.item_type
+	""", espn_player_id)
+	return {
+		"query":         label,
+		"exact":         True,
+		"players":       [{"espn_player_id": espn_player_id,
+		                   "names": sorted({r["player_name"] for r in rows})}],
+		"times_added":   sum(1 for r in rows if r["item_type"] == "ADD"),
+		"times_dropped": sum(1 for r in rows if r["item_type"] == "DROP"),
+		"results":       [dict(row) for row in rows],
+	}
 
 
 @router.get("/records/biggest-bids")
@@ -386,9 +360,9 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 
 
 _BARGAIN_SORTS = {
-	"ppg":        "ppg DESC, s.points DESC, p.season, p.week, p.id",
-	"points":     "s.points DESC, ppg DESC, p.season, p.week, p.id",
-	"per_dollar": "points_per_dollar DESC, s.points DESC, p.season, p.week, p.id",
+	"ppg":        "ppg DESC, s.points DESC, s.season, s.week, s.id",
+	"points":     "s.points DESC, ppg DESC, s.season, s.week, s.id",
+	"per_dollar": "points_per_dollar DESC, s.points DESC, s.season, s.week, s.id",
 }
 
 
@@ -402,6 +376,10 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 	player within the stint, starters and bench alike, playoff weeks included. Weeks with
 	no NFL game for the player (has_stats = FALSE: NFL bye or no NFL team) are not counted;
 	inactive/IR weeks (a zero stat line) are.
+
+	The paid/free and season filters apply after next_pickup_week is computed over every pickup,
+	and the stint totals carry the pickup's columns, so nothing joins back to pickups (that join
+	was a nested loop over the whole CTE when the planner misjudged the free-pickup count).
 	"""
 	if sort not in _BARGAIN_SORTS:
 		raise HTTPException(status_code=400, detail=f"sort must be one of {sorted(_BARGAIN_SORTS)}")
@@ -420,7 +398,8 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				WHERE t.status = 'EXECUTED' AND t.type IN ('WAIVER', 'FREEAGENT')
 			),
 			stints AS (
-				SELECT p.id,
+				SELECT p.id, p.season, p.week, p.team_id, p.player_name, p.position, p.type,
+				       p.bid_amount, p.event_at,
 				       COUNT(b.id)                       AS games,
 				       COALESCE(SUM(b.points_scored), 0) AS points
 				FROM pickups p
@@ -431,28 +410,28 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				      AND b.week >= p.week
 				      AND (p.next_pickup_week IS NULL OR b.week < p.next_pickup_week)
 				      AND b.has_stats
-				GROUP BY p.id
+				WHERE (CASE WHEN $1 THEN p.bid_amount > 0 ELSE p.bid_amount = 0 END)
+				  AND ($3::numeric IS NULL OR p.season = $3)
+				GROUP BY p.id, p.season, p.week, p.team_id, p.player_name, p.position, p.type,
+				         p.bid_amount, p.event_at
 			)
 			SELECT
-				p.season,
-				p.week,
+				s.season,
+				s.week,
 				tm.owner,
 				tm.team_id,
-				p.player_name,
-				p.position,
-				p.type,
-				p.bid_amount,
-				p.event_at,
+				s.player_name,
+				s.position,
+				s.type,
+				s.bid_amount,
+				s.event_at,
 				s.games,
 				s.points,
 				ROUND(s.points / s.games, 2)                                          AS ppg,
-				CASE WHEN p.bid_amount > 0 THEN ROUND(s.points / p.bid_amount, 2) END AS points_per_dollar
-			FROM pickups p
-			JOIN stints s ON s.id = p.id
-			JOIN teams tm ON tm.team_id = p.team_id
-			WHERE (CASE WHEN $1 THEN p.bid_amount > 0 ELSE p.bid_amount = 0 END)
-			  AND s.games >= GREATEST($2, 1)
-			  AND ($3::numeric IS NULL OR p.season = $3)
+				CASE WHEN s.bid_amount > 0 THEN ROUND(s.points / s.bid_amount, 2) END AS points_per_dollar
+			FROM stints s
+			JOIN teams tm ON tm.team_id = s.team_id
+			WHERE s.games >= GREATEST($2, 1)
 			ORDER BY {_BARGAIN_SORTS[sort]}
 			LIMIT $4
 		""", paid, min_games, season, limit)

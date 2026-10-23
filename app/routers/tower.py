@@ -7,10 +7,7 @@ Endpoints:
   POST /tower/score                 → stores a completed round result
   GET  /tower/leaderboard?limit=20  → top scores
 
-Place this file at: app/routers/tower.py
-Register in app/main.py: app.include_router(tower.router)
-
-Dependencies: question_bank.py must be at app/question_bank.py
+Questions come from app/question_bank.py.
 """
 
 import hashlib

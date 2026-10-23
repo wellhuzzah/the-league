@@ -217,15 +217,11 @@ async def q_highest_single_week(db, rng: random.Random, seasons: list[int], owne
 	season = rng.choice(seasons)
 	row = await db.fetchrow(
 		"""
-		SELECT t.owner, m.week,
-			GREATEST(m.home_score, m.away_score) AS top_score,
-			CASE WHEN m.home_score > m.away_score THEN ht.owner ELSE at.owner END AS scorer
-		FROM matchups m
-		JOIN teams ht ON m.home_team_id = ht.team_id
-		JOIN teams at ON m.away_team_id = at.team_id
-		JOIN teams t ON t.team_id = CASE WHEN m.home_score > m.away_score THEN m.home_team_id ELSE m.away_team_id END
-		WHERE m.season = $1 AND m.home_score > 0 AND m.away_score > 0
-		ORDER BY top_score DESC
+		SELECT t.owner, tg.week, tg.score AS top_score
+		FROM team_games tg
+		JOIN teams t ON t.team_id = tg.team_id
+		WHERE tg.season = $1 AND tg.score > 0 AND tg.opp_score > 0
+		ORDER BY tg.score DESC, tg.week, t.owner
 		LIMIT 1
 		""",
 		season,
@@ -523,16 +519,21 @@ async def q_player_owner(db, rng: random.Random, seasons: list[int], owners: lis
 
 async def q_h2h_series_leader(db, rng: random.Random, seasons: list[int], owners: list[str]) -> Optional[dict]:
 	"""Who leads the all-time H2H series between owner A and owner B?"""
-	# pick two owners who have played each other a meaningful number of times
+	# pick two owners who have played each other a meaningful number of times, with the series
+	# record, in one query. Grouped per matchup (not team_games) so the seeded daily round picks
+	# the same pair as before.
 	row = await db.fetchrow(
 		"""
 		SELECT
 			LEAST(ht.owner, at.owner) AS owner_a,
 			GREATEST(ht.owner, at.owner) AS owner_b,
-			COUNT(*) AS games
+			COUNT(*) AS games,
+			COUNT(*) FILTER (WHERE wt.owner = LEAST(ht.owner, at.owner)) AS wins_a,
+			COUNT(*) FILTER (WHERE wt.owner = GREATEST(ht.owner, at.owner)) AS wins_b
 		FROM matchups m
 		JOIN teams ht ON m.home_team_id = ht.team_id
 		JOIN teams at ON m.away_team_id = at.team_id
+		LEFT JOIN teams wt ON m.winner_team_id = wt.team_id
 		WHERE ht.owner != at.owner
 		GROUP BY LEAST(ht.owner, at.owner), GREATEST(ht.owner, at.owner)
 		HAVING COUNT(*) >= 8
@@ -544,30 +545,7 @@ async def q_h2h_series_leader(db, rng: random.Random, seasons: list[int], owners
 		return None
 	owner_a = row["owner_a"]
 	owner_b = row["owner_b"]
-
-	# get win counts
-	wins_a = await db.fetchval(
-		"""
-		SELECT COUNT(*) FROM matchups m
-		JOIN teams ht ON m.home_team_id = ht.team_id
-		JOIN teams at ON m.away_team_id = at.team_id
-		JOIN teams wt ON m.winner_team_id = wt.team_id
-		WHERE ((ht.owner = $1 AND at.owner = $2) OR (ht.owner = $2 AND at.owner = $1))
-		  AND wt.owner = $1
-		""",
-		owner_a, owner_b,
-	)
-	wins_b = await db.fetchval(
-		"""
-		SELECT COUNT(*) FROM matchups m
-		JOIN teams ht ON m.home_team_id = ht.team_id
-		JOIN teams at ON m.away_team_id = at.team_id
-		JOIN teams wt ON m.winner_team_id = wt.team_id
-		WHERE ((ht.owner = $1 AND at.owner = $2) OR (ht.owner = $2 AND at.owner = $1))
-		  AND wt.owner = $2
-		""",
-		owner_a, owner_b,
-	)
+	wins_a, wins_b = row["wins_a"], row["wins_b"]
 	if wins_a == wins_b:
 		return None  # skip ties for cleaner questions
 	answer = owner_a if wins_a > wins_b else owner_b
@@ -683,14 +661,15 @@ async def q_championship_game_hero(db, rng: random.Random, seasons: list[int], o
 		"""
 		SELECT m.id AS matchup_id, m.week,
 		       ht.owner AS home_owner, at.owner AS away_owner
-		FROM matchups m
-		JOIN records r ON r.season = m.season
+		FROM team_games tg
+		JOIN records r ON r.season = tg.season
 		              AND r.championship = TRUE
-		              AND r.team_id IN (m.home_team_id, m.away_team_id)
+		              AND r.team_id = tg.team_id
+		JOIN matchups m ON m.id = tg.matchup_id
 		JOIN teams ht ON m.home_team_id = ht.team_id
 		JOIN teams at ON m.away_team_id = at.team_id
-		WHERE m.season = $1 AND m.is_playoffs = TRUE
-		ORDER BY m.week DESC
+		WHERE tg.season = $1 AND tg.is_playoffs = TRUE
+		ORDER BY tg.week DESC
 		LIMIT 1
 		""",
 		season,

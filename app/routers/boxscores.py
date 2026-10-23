@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
-from app.database import get_pool
-from app.params import Limit, like_escape, search_term
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+from app.database import concurrently, get_pool
 
 router = APIRouter(
     prefix="/boxscores",
@@ -8,264 +9,11 @@ router = APIRouter(
 )
 
 
-@router.get("/top-performances")
-async def get_top_performances(limit: int = Limit(25), position: str = None):
-    """Highest single-game scores by any player across all seasons."""
-    async with (await get_pool()).acquire() as db:
-        if position:
-            rows = await db.fetch("""
-                SELECT
-                    bs.player_name,
-                    bs.position,
-                    bs.points_scored,
-                    bs.season,
-                    bs.week,
-                    bs.is_starter,
-                    t.owner,
-                    t.team_id,
-                    m.is_playoffs,
-                    opp.owner AS opponent
-                FROM box_scores bs
-                JOIN teams t ON bs.team_id = t.team_id
-                JOIN matchups m ON bs.matchup_id = m.id
-                JOIN teams opp ON opp.team_id = CASE
-                    WHEN m.home_team_id = bs.team_id THEN m.away_team_id
-                    ELSE m.home_team_id
-                END
-                WHERE bs.position = $2
-                  AND bs.is_starter = TRUE
-                ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-                LIMIT $1
-            """, limit, position)
-        else:
-            rows = await db.fetch("""
-                SELECT
-                    bs.player_name,
-                    bs.position,
-                    bs.points_scored,
-                    bs.season,
-                    bs.week,
-                    bs.is_starter,
-                    t.owner,
-                    t.team_id,
-                    m.is_playoffs,
-                    opp.owner AS opponent
-                FROM box_scores bs
-                JOIN teams t ON bs.team_id = t.team_id
-                JOIN matchups m ON bs.matchup_id = m.id
-                JOIN teams opp ON opp.team_id = CASE
-                    WHEN m.home_team_id = bs.team_id THEN m.away_team_id
-                    ELSE m.home_team_id
-                END
-                WHERE bs.is_starter = TRUE
-                ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-                LIMIT $1
-            """, limit)
-        return [
-            {**dict(row), "points_scored": float(row["points_scored"])}
-            for row in rows
-        ]
-
-
-@router.get("/position-breakdown")
-async def get_position_breakdown():
-    """Average points scored by position per season across all teams (starters, regular season)."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                bs.season,
-                bs.position,
-                ROUND(AVG(bs.points_scored)::numeric, 2)   AS avg_points,
-                ROUND(MAX(bs.points_scored)::numeric, 2)   AS max_points,
-                COUNT(*)                                   AS total_games
-            FROM box_scores bs
-            JOIN matchups m ON bs.matchup_id = m.id
-            WHERE bs.position != 'UNK'
-              AND bs.is_starter = TRUE
-              AND NOT m.is_playoffs
-            GROUP BY bs.season, bs.position
-            ORDER BY bs.season, bs.position
-        """)
-        seasons = {}
-        for row in rows:
-            s = row["season"]
-            if s not in seasons:
-                seasons[s] = {"season": s, "positions": []}
-            seasons[s]["positions"].append({
-                "position":    row["position"],
-                "avg_points":  float(row["avg_points"]),
-                "max_points":  float(row["max_points"]),
-                "total_games": row["total_games"],
-            })
-        return list(seasons.values())
-
-
-@router.get("/team/{team_id}")
-async def get_team_boxscores(team_id: int, season: int = None, include_bench: bool = False):
-    """All box score entries for a team, optionally filtered by season. Starters only unless include_bench."""
-    async with (await get_pool()).acquire() as db:
-        team = await db.fetchrow("SELECT owner FROM teams WHERE team_id = $1", team_id)
-        if not team:
-            raise HTTPException(status_code=404, detail="Team not found")
-
-        if season:
-            rows = await db.fetch("""
-                SELECT
-                    bs.season,
-                    bs.week,
-                    bs.player_name,
-                    bs.position,
-                    bs.points_scored,
-                    bs.is_starter,
-                    m.is_playoffs
-                FROM box_scores bs
-                JOIN matchups m ON bs.matchup_id = m.id
-                WHERE bs.team_id = $1 AND bs.season = $2
-                  AND (bs.is_starter = TRUE OR $3)
-                ORDER BY bs.week, bs.points_scored DESC, bs.espn_player_id
-            """, team_id, season, include_bench)
-        else:
-            rows = await db.fetch("""
-                SELECT
-                    bs.season,
-                    bs.week,
-                    bs.player_name,
-                    bs.position,
-                    bs.points_scored,
-                    bs.is_starter,
-                    m.is_playoffs
-                FROM box_scores bs
-                JOIN matchups m ON bs.matchup_id = m.id
-                WHERE bs.team_id = $1
-                  AND (bs.is_starter = TRUE OR $2)
-                ORDER BY bs.season, bs.week, bs.points_scored DESC, bs.espn_player_id
-            """, team_id, include_bench)
-
-        return {
-            "team_id": team_id,
-            "owner":   team["owner"],
-            "entries": [
-                {**dict(row), "points_scored": float(row["points_scored"])}
-                for row in rows
-            ]
-        }
-
-
-@router.get("/team/{team_id}/best-weeks")
-async def get_team_best_weeks(team_id: int, limit: int = Limit(10)):
-    """A team's best individual player performances ever."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                bs.season,
-                bs.week,
-                bs.player_name,
-                bs.position,
-                bs.points_scored,
-                bs.is_starter,
-                m.is_playoffs,
-                opp.owner AS opponent
-            FROM box_scores bs
-            JOIN matchups m ON bs.matchup_id = m.id
-            JOIN teams opp ON opp.team_id = CASE
-                WHEN m.home_team_id = $1 THEN m.away_team_id
-                ELSE m.home_team_id
-            END
-            WHERE bs.team_id = $1
-              AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.espn_player_id
-            LIMIT $2
-        """, team_id, limit)
-        return [
-            {**dict(row), "points_scored": float(row["points_scored"])}
-            for row in rows
-        ]
-
-
-@router.get("/team/{team_id}/position-totals")
-async def get_team_position_totals(team_id: int):
-    """Points scored by position per season for a team (starters, regular season)."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                bs.season,
-                bs.position,
-                ROUND(SUM(bs.points_scored)::numeric, 1)  AS total_points,
-                ROUND(AVG(bs.points_scored)::numeric, 2)  AS avg_points,
-                COUNT(*)                                   AS appearances
-            FROM box_scores bs
-            JOIN matchups m ON bs.matchup_id = m.id
-            WHERE bs.team_id = $1 AND bs.position != 'UNK'
-              AND bs.is_starter = TRUE
-              AND NOT m.is_playoffs
-            GROUP BY bs.season, bs.position
-            ORDER BY bs.season, total_points DESC, bs.position
-        """, team_id)
-
-        seasons = {}
-        for row in rows:
-            s = row["season"]
-            if s not in seasons:
-                seasons[s] = {"season": s, "positions": []}
-            seasons[s]["positions"].append({
-                "position":    row["position"],
-                "total_points": float(row["total_points"]),
-                "avg_points":   float(row["avg_points"]),
-                "appearances":  row["appearances"],
-            })
-        return list(seasons.values())
-
-
-@router.get("/player/{player_name:path}/history")
-async def get_player_history(player_name: str):
-    """All appearances of a player across all seasons and teams. Case-insensitive partial match
-    on at least 2 characters; % and _ match literally."""
-    term = search_term(player_name)
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                bs.season,
-                bs.week,
-                bs.player_name,
-                bs.position,
-                bs.points_scored,
-                bs.is_starter,
-                t.owner,
-                t.team_id,
-                m.is_playoffs
-            FROM box_scores bs
-            JOIN teams t ON bs.team_id = t.team_id
-            JOIN matchups m ON bs.matchup_id = m.id
-            WHERE bs.player_name ILIKE $1
-              AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-        """, f"%{like_escape(term)}%")
-
-        if not rows:
-            return {"query": player_name, "results": [], "total_appearances": 0}
-
-        owner_totals = {}
-        for row in rows:
-            o = row["owner"]
-            if o not in owner_totals:
-                owner_totals[o] = {"owner": o, "team_id": row["team_id"], "appearances": 0, "total_points": 0.0}
-            owner_totals[o]["appearances"] += 1
-            owner_totals[o]["total_points"] = round(owner_totals[o]["total_points"] + float(row["points_scored"]), 1)
-
-        return {
-            "query":             player_name,
-            "total_appearances": len(rows),
-            "by_owner":          sorted(owner_totals.values(), key=lambda x: x["total_points"], reverse=True),
-            "results": [
-                {**dict(row), "points_scored": float(row["points_scored"])}
-                for row in rows
-            ]
-        }
-
-
 @router.get("/week/{season}/{week}")
-async def get_week_boxscores(season: int, week: int, include_bench: bool = False):
-    """All player scores for every team in a given week. Starters only unless include_bench."""
+async def get_week_boxscores(season: int, week: int, include_bench: bool = False,
+                             team_id: Optional[list[int]] = Query(None)):
+    """Player scores for a given week, starters only unless include_bench. ?team_id= (repeatable)
+    limits it to those teams, e.g. both sides of a head-to-head game."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
@@ -279,8 +27,9 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
             JOIN teams t ON bs.team_id = t.team_id
             WHERE bs.season = $1 AND bs.week = $2
               AND (bs.is_starter = TRUE OR $3)
+              AND ($4::int[] IS NULL OR bs.team_id = ANY($4::int[]))
             ORDER BY t.owner, bs.team_id, bs.points_scored DESC, bs.espn_player_id
-        """, season, week, include_bench)
+        """, season, week, include_bench, team_id)
 
         if not rows:
             raise HTTPException(status_code=404, detail="No box score data for this week")
@@ -304,15 +53,93 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
         }
 
 
+async def random_player_card(name, player):
+    """The random-player card for a picked player (a row of the pick query)."""
+    best_game_row, top_owner, draft_info, seasons = await concurrently(
+        # Best single game details
+        lambda db: db.fetchrow("""
+            SELECT
+                bs.points_scored,
+                bs.season,
+                bs.week,
+                t.owner,
+                m.is_playoffs,
+                opp.owner AS opponent
+            FROM box_scores bs
+            JOIN teams t   ON bs.team_id = t.team_id
+            JOIN matchups m ON bs.matchup_id = m.id
+            JOIN teams opp ON opp.team_id = CASE
+                WHEN m.home_team_id = bs.team_id THEN m.away_team_id
+                ELSE m.home_team_id
+            END
+            WHERE bs.player_name = $1
+              AND bs.is_starter = TRUE
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
+            LIMIT 1
+        """, name),
+        # Owner who had them most
+        lambda db: db.fetchrow("""
+            SELECT t.owner, t.team_id, COUNT(*) AS appearances
+            FROM box_scores bs
+            JOIN teams t ON bs.team_id = t.team_id
+            WHERE bs.player_name = $1
+              AND bs.is_starter = TRUE
+            GROUP BY t.owner, t.team_id
+            ORDER BY appearances DESC, t.owner, t.team_id
+            LIMIT 1
+        """, name),
+        lambda db: db.fetchrow("""
+            SELECT
+                COUNT(*)                                AS times_drafted,
+                ROUND(AVG(overall_pick)::numeric, 1)   AS avg_pick,
+                MIN(overall_pick)                      AS earliest_pick,
+                MIN(season)                            AS first_drafted
+            FROM draft_picks
+            WHERE lower(player_name) = lower($1)
+        """, name),
+        lambda db: db.fetch("""
+            SELECT DISTINCT season
+            FROM box_scores
+            WHERE player_name = $1
+              AND is_starter = TRUE
+            ORDER BY season
+        """, name),
+    )
+    return {
+        "player_name":   name,
+        "position":      player["position"],
+        "appearances":   player["appearances"],
+        "avg_points":    float(player["avg_points"]),
+        "best_game":     float(player["best_game"]),
+        "worst_game":    float(player["worst_game"]),
+        "total_points":  float(player["total_points"]),
+        "seasons":       [r["season"] for r in seasons],
+        "best_game_detail": {
+            "points_scored": float(best_game_row["points_scored"]),
+            "season":        best_game_row["season"],
+            "week":          best_game_row["week"],
+            "owner":         best_game_row["owner"],
+            "opponent":      best_game_row["opponent"],
+            "is_playoffs":   best_game_row["is_playoffs"],
+        } if best_game_row else None,
+        "top_owner": {
+            "owner":       top_owner["owner"],
+            "team_id":     top_owner["team_id"],
+            "appearances": top_owner["appearances"],
+        } if top_owner else None,
+        "draft": {
+            "times_drafted": draft_info["times_drafted"] or 0,
+            "avg_pick":      float(draft_info["avg_pick"] or 0),
+            "earliest_pick": draft_info["earliest_pick"],
+            "first_drafted": draft_info["first_drafted"],
+        } if draft_info else None,
+    }
+
+
 @router.get("/random-player")
 async def get_random_player():
-    """
-    Returns a random player with highlight stats.
-    Pulls from box_scores so we have actual scoring data.
-    Minimum 5 appearances to filter out garbage data.
-    """
+    """A random player (5+ starts) with highlight stats."""
     async with (await get_pool()).acquire() as db:
-        # Pick a random player with enough data to be interesting
         player = await db.fetchrow("""
             SELECT
                 player_name,
@@ -330,96 +157,9 @@ async def get_random_player():
             ORDER BY RANDOM()
             LIMIT 1
         """)
-
-        if not player:
-            return None
-
-        name = player["player_name"]
-        pos  = player["position"]
-
-        # Best single game details
-        best_game_row = await db.fetchrow("""
-            SELECT
-                bs.points_scored,
-                bs.season,
-                bs.week,
-                t.owner,
-                m.is_playoffs,
-                opp.owner AS opponent
-            FROM box_scores bs
-            JOIN teams t   ON bs.team_id = t.team_id
-            JOIN matchups m ON bs.matchup_id = m.id
-            JOIN teams opp ON opp.team_id = CASE
-                WHEN m.home_team_id = bs.team_id THEN m.away_team_id
-                ELSE m.home_team_id
-            END
-            WHERE bs.player_name = $1
-              AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-            LIMIT 1
-        """, name)
-
-        # Owner who had them most
-        top_owner = await db.fetchrow("""
-            SELECT t.owner, t.team_id, COUNT(*) AS appearances
-            FROM box_scores bs
-            JOIN teams t ON bs.team_id = t.team_id
-            WHERE bs.player_name = $1
-              AND bs.is_starter = TRUE
-            GROUP BY t.owner, t.team_id
-            ORDER BY appearances DESC, t.owner, t.team_id
-            LIMIT 1
-        """, name)
-
-        # Draft info
-        draft_info = await db.fetchrow("""
-            SELECT
-                COUNT(*)                                AS times_drafted,
-                ROUND(AVG(overall_pick)::numeric, 1)   AS avg_pick,
-                MIN(overall_pick)                      AS earliest_pick,
-                MIN(season)                            AS first_drafted
-            FROM draft_picks
-            WHERE lower(player_name) = lower($1)
-        """, name)
-
-        # Seasons active
-        seasons = await db.fetch("""
-            SELECT DISTINCT season
-            FROM box_scores
-            WHERE player_name = $1
-              AND is_starter = TRUE
-            ORDER BY season
-        """, name)
-
-        return {
-            "player_name":   name,
-            "position":      pos,
-            "appearances":   player["appearances"],
-            "avg_points":    float(player["avg_points"]),
-            "best_game":     float(player["best_game"]),
-            "worst_game":    float(player["worst_game"]),
-            "total_points":  float(player["total_points"]),
-            "seasons":       [r["season"] for r in seasons],
-            "best_game_detail": {
-                "points_scored": float(best_game_row["points_scored"]),
-                "season":        best_game_row["season"],
-                "week":          best_game_row["week"],
-                "owner":         best_game_row["owner"],
-                "opponent":      best_game_row["opponent"],
-                "is_playoffs":   best_game_row["is_playoffs"],
-            } if best_game_row else None,
-            "top_owner": {
-                "owner":       top_owner["owner"],
-                "team_id":     top_owner["team_id"],
-                "appearances": top_owner["appearances"],
-            } if top_owner else None,
-            "draft": {
-                "times_drafted": draft_info["times_drafted"] or 0,
-                "avg_pick":      float(draft_info["avg_pick"] or 0),
-                "earliest_pick": draft_info["earliest_pick"],
-                "first_drafted": draft_info["first_drafted"],
-            } if draft_info else None,
-        }
+    if not player:
+        return None
+    return await random_player_card(player["player_name"], player)
 
 
 @router.get("/position/{position:path}/summary")
@@ -430,15 +170,16 @@ async def get_position_summary(position: str):
     """
     if not position.strip():
         raise HTTPException(status_code=404, detail="Position not found")
-    async with (await get_pool()).acquire() as db:
 
-        # Normalize position
-        pos = position.upper().replace("-", "/")
-        if pos == "DST":
-            pos = "D/ST"
+    # Normalize position
+    pos = position.upper().replace("-", "/")
+    if pos == "DST":
+        pos = "D/ST"
 
+    (scoring, top_games, bottom_games, most_rostered, by_season, draft_stats, draft_by_season,
+     most_drafted) = await concurrently(
         # Overall scoring stats
-        scoring = await db.fetchrow("""
+        lambda db: db.fetchrow("""
             SELECT
                 COUNT(*)                                        AS total_appearances,
                 ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
@@ -450,10 +191,9 @@ async def get_position_summary(position: str):
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
-        """, pos)
-
+        """, pos),
         # Top 10 single-game performances
-        top_games = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 bs.player_name,
                 bs.points_scored,
@@ -474,10 +214,9 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
             LIMIT 10
-        """, pos)
-
+        """, pos),
         # Bottom 5 single-game scores
-        bottom_games = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 bs.player_name,
                 bs.points_scored,
@@ -493,10 +232,9 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
             ORDER BY bs.points_scored ASC, bs.season, bs.week, bs.team_id, bs.espn_player_id
             LIMIT 5
-        """, pos)
-
+        """, pos),
         # Most appearances (most rostered players at this position)
-        most_rostered = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 bs.player_name,
                 COUNT(*)                                        AS appearances,
@@ -511,10 +249,9 @@ async def get_position_summary(position: str):
             GROUP BY bs.player_name
             ORDER BY appearances DESC, bs.player_name
             LIMIT 10
-        """, pos)
-
+        """, pos),
         # Avg points by season (trend over time)
-        by_season = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 bs.season,
                 ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
@@ -527,10 +264,9 @@ async def get_position_summary(position: str):
               AND NOT m.is_playoffs
             GROUP BY bs.season
             ORDER BY bs.season
-        """, pos)
-
+        """, pos),
         # Draft stats for this position
-        draft_stats = await db.fetchrow("""
+        lambda db: db.fetchrow("""
             SELECT
                 COUNT(*)                                        AS times_drafted,
                 ROUND(AVG(overall_pick)::numeric, 1)           AS avg_pick,
@@ -539,10 +275,9 @@ async def get_position_summary(position: str):
                 SUM(CASE WHEN is_keeper THEN 1 ELSE 0 END)    AS keeper_count
             FROM draft_picks
             WHERE position = $1
-        """, pos)
-
+        """, pos),
         # Draft ADP trend by season
-        draft_by_season = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 season,
                 ROUND(AVG(overall_pick)::numeric, 1)           AS avg_pick,
@@ -552,10 +287,9 @@ async def get_position_summary(position: str):
             WHERE position = $1
             GROUP BY season
             ORDER BY season
-        """, pos)
-
+        """, pos),
         # Most drafted players at this position (draft history)
-        most_drafted = await db.fetch("""
+        lambda db: db.fetch("""
             SELECT
                 player_name,
                 COUNT(*)                                        AS times_drafted,
@@ -569,46 +303,47 @@ async def get_position_summary(position: str):
             GROUP BY player_name
             ORDER BY times_drafted DESC
             LIMIT 10
-        """, pos)
+        """, pos),
+    )
 
-        return {
-            "position": pos,
-            "scoring": {
-                "total_appearances": scoring["total_appearances"],
-                "avg_points":        float(scoring["avg_points"] or 0),
-                "max_points":        float(scoring["max_points"] or 0),
-                "min_points":        float(scoring["min_points"] or 0),
-                "stddev_points":     float(scoring["stddev_points"] or 0),
-            },
-            "top_games": [
-                {**dict(r), "points_scored": float(r["points_scored"])}
-                for r in top_games
-            ],
-            "bottom_games": [
-                {**dict(r), "points_scored": float(r["points_scored"])}
-                for r in bottom_games
-            ],
-            "most_rostered": [
-                {**dict(r), "avg_points": float(r["avg_points"] or 0),
-                 "total_points": float(r["total_points"] or 0),
-                 "best_game": float(r["best_game"] or 0)}
-                for r in most_rostered
-            ],
-            "by_season": [
-                {**dict(r), "avg_points": float(r["avg_points"] or 0),
-                 "max_points": float(r["max_points"] or 0)}
-                for r in by_season
-            ],
-            "draft": {
-                "times_drafted": draft_stats["times_drafted"] or 0,
-                "avg_pick":      float(draft_stats["avg_pick"] or 0),
-                "earliest_pick": draft_stats["earliest_pick"],
-                "latest_pick":   draft_stats["latest_pick"],
-                "keeper_count":  draft_stats["keeper_count"] or 0,
-            },
-            "draft_by_season": [dict(r) for r in draft_by_season],
-            "most_drafted": [
-                {**dict(r), "avg_pick": float(r["avg_pick"] or 0)}
-                for r in most_drafted
-            ],
-        }
+    return {
+        "position": pos,
+        "scoring": {
+            "total_appearances": scoring["total_appearances"],
+            "avg_points":        float(scoring["avg_points"] or 0),
+            "max_points":        float(scoring["max_points"] or 0),
+            "min_points":        float(scoring["min_points"] or 0),
+            "stddev_points":     float(scoring["stddev_points"] or 0),
+        },
+        "top_games": [
+            {**dict(r), "points_scored": float(r["points_scored"])}
+            for r in top_games
+        ],
+        "bottom_games": [
+            {**dict(r), "points_scored": float(r["points_scored"])}
+            for r in bottom_games
+        ],
+        "most_rostered": [
+            {**dict(r), "avg_points": float(r["avg_points"] or 0),
+             "total_points": float(r["total_points"] or 0),
+             "best_game": float(r["best_game"] or 0)}
+            for r in most_rostered
+        ],
+        "by_season": [
+            {**dict(r), "avg_points": float(r["avg_points"] or 0),
+             "max_points": float(r["max_points"] or 0)}
+            for r in by_season
+        ],
+        "draft": {
+            "times_drafted": draft_stats["times_drafted"] or 0,
+            "avg_pick":      float(draft_stats["avg_pick"] or 0),
+            "earliest_pick": draft_stats["earliest_pick"],
+            "latest_pick":   draft_stats["latest_pick"],
+            "keeper_count":  draft_stats["keeper_count"] or 0,
+        },
+        "draft_by_season": [dict(r) for r in draft_by_season],
+        "most_drafted": [
+            {**dict(r), "avg_pick": float(r["avg_pick"] or 0)}
+            for r in most_drafted
+        ],
+    }

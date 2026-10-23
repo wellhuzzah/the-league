@@ -8,6 +8,62 @@ router = APIRouter(
     tags=["draft"]
 )
 
+# Every pick with its drafted player's regular-season starter points that season.
+# By id, not name: names collide (2010 has two drafted Mike Williamses).
+PICK_VALUE = """
+    SELECT
+        dp.season,
+        dp.player_name,
+        dp.position,
+        dp.overall_pick,
+        dp.round_num,
+        dp.pick_in_round,
+        dp.is_keeper,
+        t.owner,
+        t.team_id,
+        COALESCE(ROUND(SUM(bs.points_scored)::numeric, 1), 0) AS season_points,
+        COUNT(bs.week) AS weeks_active
+    FROM draft_picks dp
+    JOIN teams t ON dp.team_id = t.team_id
+    LEFT JOIN (box_scores bs
+               JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
+        ON bs.espn_player_id = dp.espn_player_id
+       AND bs.season = dp.season
+       AND bs.is_starter = TRUE
+    {where}
+    GROUP BY dp.season, dp.player_name, dp.position, dp.overall_pick,
+             dp.round_num, dp.pick_in_round, dp.is_keeper, t.owner, t.team_id
+    ORDER BY dp.season, dp.overall_pick
+"""
+
+
+def value_pick(row, with_season):
+    pick = {"season": row["season"]} if with_season else {}
+    pick.update({
+        "player_name":   row["player_name"],
+        "position":      row["position"],
+        "overall_pick":  row["overall_pick"],
+        "round_num":     row["round_num"],
+        "pick_in_round": row["pick_in_round"],
+        "is_keeper":     row["is_keeper"],
+        "owner":         row["owner"],
+        "season_points": float(row["season_points"]),
+        "weeks_active":  row["weeks_active"],
+    })
+    return pick
+
+
+def rank_season(picks):
+    """Add scoring_rank (by season points; unscored picks rank last) and value_gap (pick minus
+    rank) to one season's picks, in place. Returns the scored picks, best first."""
+    scored = sorted([p for p in picks if p["season_points"] > 0],
+                    key=lambda p: p["season_points"], reverse=True)
+    rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
+    for p in picks:
+        p["scoring_rank"] = rank_map.get(p["overall_pick"], len(picks) + 1)
+        p["value_gap"] = p["overall_pick"] - p["scoring_rank"]
+    return scored
+
 
 @router.get("/")
 async def get_draft_seasons():
@@ -29,70 +85,68 @@ async def get_draft_seasons():
 _POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST']
 
 
-@router.get("/tendencies")
-async def get_draft_tendencies():
-    """Round-by-round position tendency per owner across all seasons."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            WITH season_counts AS (
-                SELECT t.owner, t.team_id, COUNT(DISTINCT dp.season) AS seasons_played
-                FROM draft_picks dp
-                JOIN teams t ON dp.team_id = t.team_id
-                GROUP BY t.owner, t.team_id
-            )
-            SELECT
-                sc.owner,
-                sc.team_id,
-                sc.seasons_played,
-                dp.round_num,
-                dp.position,
-                COUNT(*) AS pick_count
+async def draft_tendencies(db):
+    """Round-by-round position tendency per owner across all seasons (Records page)."""
+    rows = await db.fetch("""
+        WITH season_counts AS (
+            SELECT t.owner, t.team_id, COUNT(DISTINCT dp.season) AS seasons_played
             FROM draft_picks dp
             JOIN teams t ON dp.team_id = t.team_id
-            JOIN season_counts sc ON sc.team_id = t.team_id
-            WHERE dp.position IS NOT NULL
-              AND dp.round_num BETWEEN 1 AND 16
-            GROUP BY sc.owner, sc.team_id, sc.seasons_played, dp.round_num, dp.position
-            ORDER BY sc.owner, dp.round_num
-        """)
+            GROUP BY t.owner, t.team_id
+        )
+        SELECT
+            sc.owner,
+            sc.team_id,
+            sc.seasons_played,
+            dp.round_num,
+            dp.position,
+            COUNT(*) AS pick_count
+        FROM draft_picks dp
+        JOIN teams t ON dp.team_id = t.team_id
+        JOIN season_counts sc ON sc.team_id = t.team_id
+        WHERE dp.position IS NOT NULL
+          AND dp.round_num BETWEEN 1 AND 16
+        GROUP BY sc.owner, sc.team_id, sc.seasons_played, dp.round_num, dp.position
+        ORDER BY sc.owner, dp.round_num
+    """)
 
-        owners: dict = {}
-        for row in rows:
-            o = row["owner"]
-            if o not in owners:
-                owners[o] = {
-                    "owner":          o,
-                    "team_id":        row["team_id"],
-                    "seasons_played": row["seasons_played"],
-                    "rounds":         {},
-                }
-            r   = row["round_num"]
-            pos = "DST" if row["position"] == "D/ST" else row["position"]
-            if r not in owners[o]["rounds"]:
-                owners[o]["rounds"][r] = {p: 0 for p in _POSITIONS}
-            if pos in owners[o]["rounds"][r]:
-                owners[o]["rounds"][r][pos] = row["pick_count"]
+    owners: dict = {}
+    for row in rows:
+        o = row["owner"]
+        if o not in owners:
+            owners[o] = {
+                "owner":          o,
+                "team_id":        row["team_id"],
+                "seasons_played": row["seasons_played"],
+                "rounds":         {},
+            }
+        r   = row["round_num"]
+        pos = "DST" if row["position"] == "D/ST" else row["position"]
+        if r not in owners[o]["rounds"]:
+            owners[o]["rounds"][r] = {p: 0 for p in _POSITIONS}
+        if pos in owners[o]["rounds"][r]:
+            owners[o]["rounds"][r][pos] = row["pick_count"]
 
-        result = []
-        for od in owners.values():
-            rounds_list = [
-                {"round": r, "counts": od["rounds"].get(r, {p: 0 for p in _POSITIONS})}
-                for r in range(1, 17)
-            ]
-            result.append({
-                "owner":          od["owner"],
-                "team_id":        od["team_id"],
-                "seasons_played": od["seasons_played"],
-                "rounds":         rounds_list,
-            })
+    result = []
+    for od in owners.values():
+        rounds_list = [
+            {"round": r, "counts": od["rounds"].get(r, {p: 0 for p in _POSITIONS})}
+            for r in range(1, 17)
+        ]
+        result.append({
+            "owner":          od["owner"],
+            "team_id":        od["team_id"],
+            "seasons_played": od["seasons_played"],
+            "rounds":         rounds_list,
+        })
 
-        return sorted(result, key=lambda x: x["owner"])
+    return sorted(result, key=lambda x: x["owner"])
 
 
 @router.get("/player/{player_name:path}")
 async def search_player_draft_history(player_name: str):
     """
-    Search how many times and by whom a player has been drafted.
+    Search how many times and by whom a player has been drafted (Draft page search).
     Case-insensitive partial match on at least 2 characters; % and _ match literally.
     """
     term = search_term(player_name)
@@ -120,20 +174,7 @@ async def search_player_draft_history(player_name: str):
         return {
             "query":         player_name,
             "times_drafted": len(rows),
-            "results": [
-                {
-                    "season":        row["season"],
-                    "overall_pick":  row["overall_pick"],
-                    "round_num":     row["round_num"],
-                    "pick_in_round": row["pick_in_round"],
-                    "player_name":   row["player_name"],
-                    "position":      row["position"],
-                    "is_keeper":     row["is_keeper"],
-                    "owner":         row["owner"],
-                    "team_id":       row["team_id"],
-                }
-                for row in rows
-            ]
+            "results":       [dict(row) for row in rows],
         }
 
 
@@ -141,250 +182,65 @@ async def search_player_draft_history(player_name: str):
 async def get_value_history(limit: int = Limit(25)):
     """All-time best steals and busts across every draft season."""
     async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.season,
-                dp.player_name,
-                dp.position,
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.is_keeper,
-                t.owner,
-                COALESCE(ROUND(SUM(bs.points_scored)::numeric, 1), 0) AS season_points,
-                COUNT(bs.week) AS weeks_active
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            LEFT JOIN (box_scores bs
-                       JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
-                -- by id, not name: names collide (2010 has two drafted Mike Williamses)
-                ON bs.espn_player_id = dp.espn_player_id
-               AND bs.season = dp.season
-               AND bs.is_starter = TRUE
-            GROUP BY dp.season, dp.player_name, dp.position, dp.overall_pick,
-                     dp.round_num, dp.pick_in_round, dp.is_keeper, t.owner
-            ORDER BY dp.season, dp.overall_pick
-        """)
+        rows = await db.fetch(PICK_VALUE.format(where=""))
 
-        by_season = defaultdict(list)
-        for row in rows:
-            by_season[row["season"]].append({
-                "season":        row["season"],
-                "player_name":   row["player_name"],
-                "position":      row["position"],
-                "overall_pick":  row["overall_pick"],
-                "round_num":     row["round_num"],
-                "pick_in_round": row["pick_in_round"],
-                "is_keeper":     row["is_keeper"],
-                "owner":         row["owner"],
-                "season_points": float(row["season_points"]),
-                "weeks_active":  row["weeks_active"],
-            })
+    by_season = defaultdict(list)
+    for row in rows:
+        by_season[row["season"]].append(value_pick(row, with_season=True))
 
-        all_picks = []
-        for season_picks in by_season.values():
-            scored = sorted(
-                [p for p in season_picks if p["season_points"] > 0],
-                key=lambda p: p["season_points"], reverse=True
-            )
-            rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
-            for p in season_picks:
-                p["scoring_rank"] = rank_map.get(p["overall_pick"], len(season_picks) + 1)
-                p["value_gap"]    = p["overall_pick"] - p["scoring_rank"]
-            all_picks.extend(season_picks)
+    all_picks = []
+    for season_picks in by_season.values():
+        rank_season(season_picks)
+        all_picks.extend(season_picks)
 
-        steals = sorted(
-            [p for p in all_picks if p["season_points"] > 0],
-            key=lambda p: p["value_gap"], reverse=True
-        )[:limit]
+    steals = sorted(
+        [p for p in all_picks if p["season_points"] > 0],
+        key=lambda p: p["value_gap"], reverse=True
+    )[:limit]
 
-        busts = sorted(
-            [p for p in all_picks if p["round_num"] <= 2],
-            key=lambda p: p["season_points"]
-        )[:limit]
+    busts = sorted(
+        [p for p in all_picks if p["round_num"] <= 2],
+        key=lambda p: p["season_points"]
+    )[:limit]
 
-        return {"steals": steals, "busts": busts}
+    return {"steals": steals, "busts": busts}
 
 
 @router.get("/{year}")
 async def get_draft(year: int):
-    """Full draft board for a season."""
+    """Everything the Draft page shows for a season, from one query: the board by round, and the
+    value table (draft position against season scoring) with the steal and the bust. The page
+    groups picks by team itself."""
     async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.player_name,
-                dp.position,
-                dp.is_keeper,
-                dp.espn_player_id,
-                t.owner,
-                t.team_id
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            WHERE dp.season = $1
-            ORDER BY dp.overall_pick
-        """, year)
-        if not rows:
-            raise HTTPException(status_code=404, detail="Draft not found")
+        rows = await db.fetch(PICK_VALUE.format(where="WHERE dp.season = $1"), year)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Draft not found")
 
-        rounds = {}
-        for row in rows:
-            r = row["round_num"]
-            if r not in rounds:
-                rounds[r] = []
-            rounds[r].append({
-                "overall_pick":  row["overall_pick"],
-                "pick_in_round": row["pick_in_round"],
-                "player_name":   row["player_name"],
-                "position":      row["position"],
-                "is_keeper":     row["is_keeper"],
-                "owner":         row["owner"],
-                "team_id":       row["team_id"],
-            })
+    rounds = {}
+    for row in rows:
+        rounds.setdefault(row["round_num"], []).append({
+            "overall_pick":  row["overall_pick"],
+            "pick_in_round": row["pick_in_round"],
+            "player_name":   row["player_name"],
+            "position":      row["position"],
+            "is_keeper":     row["is_keeper"],
+            "owner":         row["owner"],
+            "team_id":       row["team_id"],
+        })
 
-        return {
-            "season": year,
-            "rounds": [
-                {"round": r, "picks": picks}
-                for r, picks in sorted(rounds.items())
-            ]
-        }
+    picks = [value_pick(row, with_season=False) for row in rows]
+    scored = rank_season(picks)
+    steal = max(scored, key=lambda p: p["value_gap"]) if scored else None
+    early = [p for p in picks if p["round_num"] <= 2]
+    bust  = min(early, key=lambda p: p["season_points"]) if early else None
 
-
-@router.get("/{year}/by-team")
-async def get_draft_by_team(year: int):
-    """Draft picks for a season organized by team."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.player_name,
-                dp.position,
-                dp.is_keeper,
-                t.owner,
-                t.team_id
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            WHERE dp.season = $1
-            ORDER BY t.owner, dp.overall_pick
-        """, year)
-        if not rows:
-            raise HTTPException(status_code=404, detail="Draft not found")
-
-        teams = {}
-        for row in rows:
-            owner = row["owner"]
-            if owner not in teams:
-                teams[owner] = {
-                    "owner":   owner,
-                    "team_id": row["team_id"],
-                    "picks":   []
-                }
-            teams[owner]["picks"].append({
-                "overall_pick":  row["overall_pick"],
-                "round_num":     row["round_num"],
-                "pick_in_round": row["pick_in_round"],
-                "player_name":   row["player_name"],
-                "position":      row["position"],
-                "is_keeper":     row["is_keeper"],
-            })
-
-        return {"season": year, "teams": list(teams.values())}
-
-
-@router.get("/{year}/keepers")
-async def get_keepers(year: int):
-    """All keeper picks for a season."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.player_name,
-                dp.position,
-                t.owner,
-                t.team_id
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            WHERE dp.season = $1 AND dp.is_keeper = TRUE
-            ORDER BY dp.overall_pick
-        """, year)
-
-        return {
-            "season":  year,
-            "keepers": [dict(row) for row in rows]
-        }
-
-
-@router.get("/{year}/value")
-async def get_draft_value(year: int):
-    """Draft pick value — compares draft position to season scoring for a single year."""
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.player_name,
-                dp.position,
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.is_keeper,
-                t.owner,
-                COALESCE(ROUND(SUM(bs.points_scored)::numeric, 1), 0) AS season_points,
-                COUNT(bs.week) AS weeks_active
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            LEFT JOIN (box_scores bs
-                       JOIN matchups bm ON bm.id = bs.matchup_id AND NOT bm.is_playoffs)
-                -- by id, not name: names collide (2010 has two drafted Mike Williamses)
-                ON bs.espn_player_id = dp.espn_player_id
-               AND bs.season = dp.season
-               AND bs.is_starter = TRUE
-            WHERE dp.season = $1
-            GROUP BY dp.player_name, dp.position, dp.overall_pick, dp.round_num,
-                     dp.pick_in_round, dp.is_keeper, t.owner
-            ORDER BY dp.overall_pick
-        """, year)
-
-        if not rows:
-            raise HTTPException(status_code=404, detail="Draft not found")
-
-        picks = [
-            {
-                "player_name":   row["player_name"],
-                "position":      row["position"],
-                "overall_pick":  row["overall_pick"],
-                "round_num":     row["round_num"],
-                "pick_in_round": row["pick_in_round"],
-                "is_keeper":     row["is_keeper"],
-                "owner":         row["owner"],
-                "season_points": float(row["season_points"]),
-                "weeks_active":  row["weeks_active"],
-            }
-            for row in rows
-        ]
-
-        scored = sorted(
-            [p for p in picks if p["season_points"] > 0],
-            key=lambda p: p["season_points"], reverse=True
-        )
-        rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
-
-        for p in picks:
-            p["scoring_rank"] = rank_map.get(p["overall_pick"], len(picks) + 1)
-            p["value_gap"]    = p["overall_pick"] - p["scoring_rank"]
-
-        steal = max(scored, key=lambda p: p["value_gap"]) if scored else None
-        early = [p for p in picks if p["round_num"] <= 2]
-        bust  = min(early, key=lambda p: p["season_points"]) if early else None
-
-        return {
+    return {
+        "season": year,
+        "rounds": [{"round": r, "picks": p} for r, p in sorted(rounds.items())],
+        "value": {
             "season": year,
             "picks":  sorted(picks, key=lambda p: p["value_gap"], reverse=True),
             "steal":  steal,
             "bust":   bust,
-        }
+        },
+    }
