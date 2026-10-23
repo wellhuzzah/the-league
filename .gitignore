@@ -20,6 +20,7 @@ __pycache__/
 *.md
 *.sql
 !/schema_v3.sql
+!/scripts/rollback_phase3.sql
 /espn_raw/
 /backups/
 /docs/*

@@ -10,7 +10,8 @@ Usage:
 Imports, in order: espn_team_map -> matchups -> box_scores -> draft_picks.
 Only COMPLETED matchups (winner != UNDECIDED) are written. Never writes to
 the `records` table. box_scores holds the full roster (starters, bench, IR);
-lineup_slot is ESPN's lineupSlotId and is_starter = slot NOT IN (20, 21).
+lineup_slot is ESPN's lineupSlotId; is_starter is a generated column
+(lineup_slot NOT IN (20, 21)), so the importer never writes it.
 Teams with no matchup that week (playoff byes) get no box_scores rows.
 --box-scores-only re-imports box_scores for any season without touching
 espn_team_map, matchups or draft_picks. Every ESPN response is archived to
@@ -51,7 +52,7 @@ SLOT_LABEL = {
 	0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "D/ST", 17: "K", 23: "FLEX",
 	20: "BE", 21: "IR",
 }
-BENCH_SLOTS = {20, 21}  # is_starter = lineup_slot NOT IN (20, 21)
+BENCH_SLOTS = {20, 21}  # must match box_scores.is_starter's GENERATED expression
 
 
 def dec(x):
@@ -440,17 +441,16 @@ async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks
 				res = await conn.fetchrow("""
 					INSERT INTO box_scores (matchup_id, team_id, season, week, espn_player_id,
 					                        player_name, nfl_team, position, lineup_slot,
-					                        is_starter, points_scored, projected_points, has_stats)
-					VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12)
+					                        points_scored, projected_points, has_stats)
+					VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11)
 					ON CONFLICT (matchup_id, team_id, espn_player_id, week)
 					DO UPDATE SET points_scored = EXCLUDED.points_scored,
 					              projected_points = EXCLUDED.projected_points,
-					              is_starter = EXCLUDED.is_starter,
 					              lineup_slot = EXCLUDED.lineup_slot,
 					              has_stats = EXCLUDED.has_stats
 					RETURNING (xmax = 0) AS inserted
 				""", r["matchup_id"], r["team_id"], dec(season), r["week"], r["espn_player_id"],
-				     r["player_name"], r["position"], r["lineup_slot"], r["is_starter"],
+				     r["player_name"], r["position"], r["lineup_slot"],
 				     r["points"], r["projected"], r["has_stats"])
 				if res["inserted"]:
 					ins += 1

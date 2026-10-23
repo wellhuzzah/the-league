@@ -112,3 +112,42 @@ CREATE INDEX idx_transaction_items_player_lower ON transaction_items (lower(play
 CREATE INDEX idx_draft_picks_player_lower       ON draft_picks (lower(player_name));
 CREATE INDEX idx_box_scores_season_week         ON box_scores (season, week);
 ANALYZE box_scores, transaction_items, draft_picks;
+
+-- ===========================================================================
+-- 5. team_games view, dead objects dropped, generated is_starter   (2026-10-22, audit Phase 3)
+-- ===========================================================================
+-- Before: rockwood_pre_phase3.dump on D:. Undo: scripts\rollback_phase3.sql (+ rollback_phase3.ps1,
+-- which also restores the two dropped tables from that dump).
+
+BEGIN;
+
+-- One row per team per matchup: "that team's side" without JOIN teams ON team_id IN (home, away).
+-- SELECT reaches rockwood_api and rockwood_writer through the default privileges.
+CREATE VIEW team_games AS
+SELECT m.id AS matchup_id, m.season, m.week, m.is_playoffs,
+       m.home_team_id AS team_id, m.away_team_id AS opp_id,
+       m.home_score AS score, m.away_score AS opp_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.home_team_id THEN 'W' ELSE 'L' END AS result
+FROM matchups m
+UNION ALL
+SELECT m.id, m.season, m.week, m.is_playoffs,
+       m.away_team_id, m.home_team_id,
+       m.away_score, m.home_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.away_team_id THEN 'W' ELSE 'L' END
+FROM matchups m;
+
+-- Read and written by nothing
+DROP TABLE draft_order;
+DROP TABLE box_scores_backup_20261007;
+ALTER TABLE espn_team_map DROP COLUMN team_name;   -- NULL in all 248 rows
+
+-- is_starter derived by the database instead of by espn_import.py plus a CHECK
+ALTER TABLE box_scores DROP CONSTRAINT box_scores_starter_from_slot;
+ALTER TABLE box_scores DROP COLUMN is_starter;
+ALTER TABLE box_scores ADD COLUMN is_starter boolean
+	GENERATED ALWAYS AS (lineup_slot NOT IN (20, 21)) STORED NOT NULL;
+
+COMMIT;
+ANALYZE box_scores, espn_team_map, matchups;
