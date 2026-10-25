@@ -5,9 +5,10 @@
 #    the pre-phase3 dump (filtered pg_restore)
 # 2. both repos back to the pre-phase3 tag; Phase 3 commits kept on branch phase3-rolled-back,
 #    uncommitted changes stashed
-# 3. rockwood-ui\dist replaced by dist-pre-phase3 (no rebuild needed), node_modules from the
-#    restored lockfile (axios comes back) so npm run dev works
-# 4. rockwood-api restarted, then checked
+# 3. rockwood-ui\dist replaced by dist-pre-phase3: that alone restores the live site (no rebuild).
+#    Then node_modules from the restored lockfile (axios comes back), only so npm run dev works;
+#    it runs under npm 11 because the system npm 10.8.2 crashes on installs
+# 4. rockwood-api stopped and started, then checked
 # Uses psql/pg_restore as postgres through %APPDATA%\postgresql\pgpass.conf; no passwords here.
 
 $ErrorActionPreference = 'Stop'
@@ -49,11 +50,13 @@ Write-Host '== 3. frontend'
 Remove-Item "$ui\dist" -Recurse -Force
 Copy-Item "$ui\dist-pre-phase3" "$ui\dist" -Recurse
 Push-Location $ui
-& npm ci --no-audit --no-fund
+& npx -y npm@11 ci --no-audit --no-fund
+if ($LASTEXITCODE -ne 0) { Write-Warning 'npm ci failed: the site is restored, only npm run dev needs node_modules' }
 Pop-Location
 
 Write-Host '== 4. API'
-& nssm restart rockwood-api | Out-Null
+& nssm stop rockwood-api | Out-Null
+& nssm start rockwood-api | Out-Null
 Start-Sleep 5
 (Get-Service rockwood-api).Status
 & curl.exe -s -o NUL -w "  /api/records/alltime -> %{http_code} (exists again after rollback)`n" https://theleague.letsfriggen.party/api/records/alltime
