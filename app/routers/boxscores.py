@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from app.database import concurrently, get_pool
+from app.params import top_n, without
 
 router = APIRouter(
     prefix="/boxscores",
@@ -192,8 +193,8 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
         """, pos),
-        # Top 10 single-game performances
-        lambda db: db.fetch("""
+        # Top 10 single-game performances (plus any tied with the 10th; same for the lists below)
+        lambda db: db.fetch(top_n("""
             SELECT
                 bs.player_name,
                 bs.points_scored,
@@ -202,7 +203,8 @@ async def get_position_summary(position: str):
                 t.owner,
                 t.team_id,
                 m.is_playoffs,
-                opp.owner AS opponent
+                opp.owner AS opponent,
+                bs.espn_player_id
             FROM box_scores bs
             JOIN teams t   ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
@@ -212,11 +214,9 @@ async def get_position_summary(position: str):
             END
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-            LIMIT 10
-        """, pos),
+        """, "points_scored DESC", "points_scored DESC, season, week, team_id, espn_player_id", "10"), pos),
         # Bottom 5 single-game scores
-        lambda db: db.fetch("""
+        lambda db: db.fetch(top_n("""
             SELECT
                 bs.player_name,
                 bs.points_scored,
@@ -224,17 +224,16 @@ async def get_position_summary(position: str):
                 bs.week,
                 t.owner,
                 t.team_id,
-                m.is_playoffs
+                m.is_playoffs,
+                bs.espn_player_id
             FROM box_scores bs
             JOIN teams t   ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored ASC, bs.season, bs.week, bs.team_id, bs.espn_player_id
-            LIMIT 5
-        """, pos),
+        """, "points_scored ASC", "points_scored ASC, season, week, team_id, espn_player_id", "5"), pos),
         # Most appearances (most rostered players at this position)
-        lambda db: db.fetch("""
+        lambda db: db.fetch(top_n("""
             SELECT
                 bs.player_name,
                 COUNT(*)                                        AS appearances,
@@ -247,9 +246,7 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
             GROUP BY bs.player_name
-            ORDER BY appearances DESC, bs.player_name
-            LIMIT 10
-        """, pos),
+        """, "appearances DESC", "appearances DESC, player_name", "10"), pos),
         # Avg points by season (trend over time)
         lambda db: db.fetch("""
             SELECT
@@ -289,7 +286,7 @@ async def get_position_summary(position: str):
             ORDER BY season
         """, pos),
         # Most drafted players at this position (draft history)
-        lambda db: db.fetch("""
+        lambda db: db.fetch(top_n("""
             SELECT
                 player_name,
                 COUNT(*)                                        AS times_drafted,
@@ -301,10 +298,10 @@ async def get_position_summary(position: str):
             FROM draft_picks
             WHERE position = $1
             GROUP BY player_name
-            ORDER BY times_drafted DESC
-            LIMIT 10
-        """, pos),
+        """, "times_drafted DESC", "times_drafted DESC, player_name", "10"), pos),
     )
+    top_games, bottom_games = without(top_games, "place", "espn_player_id"), without(bottom_games, "place", "espn_player_id")
+    most_rostered, most_drafted = without(most_rostered), without(most_drafted)
 
     return {
         "position": pos,

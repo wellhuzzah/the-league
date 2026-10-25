@@ -1,7 +1,7 @@
 import json
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
-from app.params import Limit
+from app.params import Limit, top_n, without
 
 router = APIRouter(
 	prefix="/transactions",
@@ -256,7 +256,7 @@ async def player_transactions(db, espn_player_id, label):
 async def get_biggest_bids(limit: int = Limit(25), season: int = None):
 	"""Top winning (EXECUTED) WAIVER bids."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
+		rows = await db.fetch(top_n(f"""
 			SELECT
 				t.bid_amount,
 				tm.owner,
@@ -265,16 +265,15 @@ async def get_biggest_bids(limit: int = Limit(25), season: int = None):
 				i.position,
 				t.season,
 				t.week,
-				{EVENT_AT} AS event_at
+				{EVENT_AT} AS event_at,
+				t.espn_txn_id
 			FROM transactions t
 			JOIN teams tm            ON tm.team_id = t.team_id
 			JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
 			WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED'
 			  AND ($2::numeric IS NULL OR t.season = $2)
-			ORDER BY t.bid_amount DESC, t.season, t.week, t.espn_txn_id
-			LIMIT $1
-		""", limit, season)
-		return [dict(row) for row in rows]
+		""", "bid_amount DESC", "bid_amount DESC, season, week, espn_txn_id", "$1"), limit, season)
+		return without(rows, "place", "espn_txn_id")
 
 
 @router.get("/records/biggest-losing-bids")
@@ -282,7 +281,7 @@ async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 	"""Top outbid (FAILED_INVALIDPLAYERSOURCE) WAIVER bids, with who won the player in that run.
 	Other failures (e.g. FAILED_PLAYERALREADYDROPPED) were not outbid and are left out."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
+		rows = await db.fetch(top_n(f"""
 			SELECT
 				t.bid_amount,
 				t.status,
@@ -294,7 +293,8 @@ async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 				t.week,
 				{EVENT_AT}  AS event_at,
 				w.owner     AS winner_owner,
-				w.bid_amount AS winning_bid
+				w.bid_amount AS winning_bid,
+				t.espn_txn_id
 			FROM transactions t
 			JOIN teams tm            ON tm.team_id = t.team_id
 			JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
@@ -302,10 +302,8 @@ async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 			WHERE t.type = 'WAIVER' AND t.status = 'FAILED_INVALIDPLAYERSOURCE'
 			  AND t.season = ANY($2::numeric[])
 			  AND ($3::numeric IS NULL OR t.season = $3)
-			ORDER BY t.bid_amount DESC, t.season, t.week, t.espn_txn_id
-			LIMIT $1
-		""", limit, LOSING_BID_SEASONS, season)
-		return [dict(row) for row in rows]
+		""", "bid_amount DESC", "bid_amount DESC, season, week, espn_txn_id", "$1"), limit, LOSING_BID_SEASONS, season)
+		return without(rows, "place", "espn_txn_id")
 
 
 @router.get("/records/biggest-overpays")
@@ -313,7 +311,7 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 	"""Winning WAIVER bid minus the highest outbid (FAILED_INVALIDPLAYERSOURCE) bid from a different
 	team on the same player in the same run. No competing bid counts as a runner-up of 0."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
+		rows = await db.fetch(top_n(f"""
 			WITH wins AS (
 				SELECT t.id, t.team_id, t.bid_amount, t.season, t.week, i.espn_player_id, i.player_name,
 				       i.position, {EVENT_AT} AS event_at, {RUN_DATE} AS run_date, t.espn_txn_id
@@ -341,7 +339,8 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 				w.position,
 				w.season,
 				w.week,
-				w.event_at
+				w.event_at,
+				w.espn_txn_id
 			FROM wins w
 			JOIN teams wt ON wt.team_id = w.team_id
 			LEFT JOIN LATERAL (
@@ -353,16 +352,15 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 				LIMIT 1
 			) r ON TRUE
 			LEFT JOIN teams rt ON rt.team_id = r.team_id
-			ORDER BY overpay DESC, w.bid_amount DESC, w.season, w.week, w.espn_txn_id
-			LIMIT $1
-		""", limit, LOSING_BID_SEASONS, season)
-		return [dict(row) for row in rows]
+		""", "overpay DESC", "overpay DESC, bid_amount DESC, season, week, espn_txn_id", "$1"), limit, LOSING_BID_SEASONS, season)
+		return without(rows, "place", "espn_txn_id")
 
 
+# sort -> (ranked value, full order). Every pickup tied with the last one on the ranked value is kept.
 _BARGAIN_SORTS = {
-	"ppg":        "ppg DESC, s.points DESC, s.season, s.week, s.id",
-	"points":     "s.points DESC, ppg DESC, s.season, s.week, s.id",
-	"per_dollar": "points_per_dollar DESC, s.points DESC, s.season, s.week, s.id",
+	"ppg":        ("ppg DESC",               "ppg DESC, points DESC, season, week, id"),
+	"points":     ("points DESC",            "points DESC, ppg DESC, season, week, id"),
+	"per_dollar": ("points_per_dollar DESC", "points_per_dollar DESC, points DESC, season, week, id"),
 }
 
 
@@ -386,7 +384,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 	if sort == "per_dollar" and not paid:
 		raise HTTPException(status_code=400, detail="sort=per_dollar needs paid=true")
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
+		rows = await db.fetch(top_n(f"""
 			WITH pickups AS (
 				SELECT t.id, t.season, t.week, t.team_id, t.type, t.bid_amount,
 				       i.espn_player_id, i.player_name, i.position,
@@ -428,13 +426,13 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				s.games,
 				s.points,
 				ROUND(s.points / s.games, 2)                                          AS ppg,
-				CASE WHEN s.bid_amount > 0 THEN ROUND(s.points / s.bid_amount, 2) END AS points_per_dollar
+				CASE WHEN s.bid_amount > 0 THEN ROUND(s.points / s.bid_amount, 2) END AS points_per_dollar,
+				s.id
 			FROM stints s
 			JOIN teams tm ON tm.team_id = s.team_id
 			WHERE s.games >= GREATEST($2, 1)
-			ORDER BY {_BARGAIN_SORTS[sort]}
-			LIMIT $4
-		""", paid, min_games, season, limit)
+		""", *_BARGAIN_SORTS[sort], "$4"), paid, min_games, season, limit)
+		rows = without(rows, "place", "id")
 		return [
 			{
 				**dict(row),
@@ -451,7 +449,7 @@ async def get_most_contested(limit: int = Limit(25), season: int = None):
 	"""Players claimed by the most distinct teams in a single waiver run. Counts the winning claim and
 	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(f"""
+		rows = await db.fetch(top_n(f"""
 			WITH claims AS (
 				SELECT t.season, t.week, {RUN_DATE} AS run_date, i.espn_player_id, i.player_name, i.position,
 				       t.team_id, tm.owner, t.bid_amount, t.status, t.id
@@ -477,7 +475,6 @@ async def get_most_contested(limit: int = Limit(25), season: int = None):
 				         ORDER BY c.bid_amount DESC, c.owner, c.id)::text     AS bids
 			FROM claims c
 			GROUP BY c.season, c.run_date, c.espn_player_id
-			ORDER BY teams DESC, claims DESC, winning_bid DESC NULLS LAST, c.season, c.run_date, c.espn_player_id
-			LIMIT $1
-		""", limit, LOSING_BID_SEASONS, season)
-		return [{**dict(row), "bids": json.loads(row["bids"])} for row in rows]
+		""", "teams DESC", "teams DESC, claims DESC, winning_bid DESC NULLS LAST, season, run_date, espn_player_id", "$1"),
+			limit, LOSING_BID_SEASONS, season)
+		return [{**row, "bids": json.loads(row["bids"])} for row in without(rows)]

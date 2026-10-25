@@ -193,17 +193,26 @@ async def get_value_history(limit: int = Limit(25)):
         rank_season(season_picks)
         all_picks.extend(season_picks)
 
-    steals = sorted(
+    steals = with_ties(sorted(
         [p for p in all_picks if p["season_points"] > 0],
         key=lambda p: p["value_gap"], reverse=True
-    )[:limit]
+    ), limit, "value_gap")
 
-    busts = sorted(
+    busts = with_ties(sorted(
         [p for p in all_picks if p["round_num"] <= 2],
         key=lambda p: p["season_points"]
-    )[:limit]
+    ), limit, "season_points")
 
     return {"steals": steals, "busts": busts}
+
+
+def with_ties(ranked, limit, key):
+    """The first `limit` items of a ranked list plus every later item tied with the last one on key
+    (league rule: equal values share a rank)."""
+    if len(ranked) <= limit:
+        return ranked
+    cutoff = ranked[limit - 1][key]
+    return ranked[:limit] + [p for p in ranked[limit:] if p[key] == cutoff]
 
 
 @router.get("/{year}")

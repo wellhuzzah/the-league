@@ -19,6 +19,7 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.database import get_pool
+from app.params import top_n
 from app.question_bank import QUESTION_GENERATORS
 
 router = APIRouter(prefix="/tower", tags=["tower"])
@@ -228,45 +229,29 @@ async def get_leaderboard(
 ):
 	"""
 	Returns top scores. Pass daily_seed to filter to a specific day's challenge.
-	Omit daily_seed for all-time free play leaderboard.
+	Omit daily_seed for all-time free play leaderboard. Equal scores share a rank, and every score
+	tied with the last place is included (league rule), so there can be more than `limit` entries.
 	"""
 	seed = _parse_seed(daily_seed)
+	scores = """
+		SELECT player_name, score, questions_correct, total_questions, played_at
+		FROM tower_scores
+		WHERE daily_seed IS NOT DISTINCT FROM $1
+	"""
 	async with (await get_pool()).acquire() as db:
-		if seed:
-			rows = await db.fetch(
-				"""
-				SELECT player_name, score, questions_correct, total_questions, played_at
-				FROM tower_scores
-				WHERE daily_seed = $1
-				ORDER BY score DESC, played_at ASC
-				LIMIT $2
-				""",
-				seed,
-				limit,
-			)
-		else:
-			rows = await db.fetch(
-				"""
-				SELECT player_name, score, questions_correct, total_questions, played_at
-				FROM tower_scores
-				WHERE daily_seed IS NULL
-				ORDER BY score DESC, played_at ASC
-				LIMIT $1
-				""",
-				limit,
-			)
+		rows = await db.fetch(top_n(scores, "score DESC", "score DESC, played_at ASC", "$2"), seed, limit)
 
 		return {
 			"daily_seed": daily_seed,
 			"entries": [
 				{
-					"rank": i + 1,
+					"rank": r["place"],
 					"player_name": r["player_name"],
 					"score": r["score"],
 					"correct": r["questions_correct"],
 					"total": r["total_questions"],
 					"played_at": r["played_at"].isoformat(),
 				}
-				for i, r in enumerate(rows)
+				for r in rows
 			],
 		}

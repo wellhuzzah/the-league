@@ -2,6 +2,7 @@ import math
 
 from fastapi import APIRouter
 from app.database import concurrently
+from app.params import top_n, without
 from app.routers.draft import draft_tendencies
 from app.routers.seasons import all_luck
 from app.routers.teams import career_totals
@@ -11,11 +12,12 @@ router = APIRouter(
     tags=["records"]
 )
 
+# Each list is the top 10 by its value, plus every row tied with the 10th (league rule: equal
+# values share a rank), so a list can be longer than 10.
 LIST_SIZE = 10
 
-# One team's side of each game (team_games), with both owners. Ties in score are broken by date
-# (direction chosen per list to match the order the old queries happened to return), then owner,
-# so the lists no longer change order between requests.
+# One team's side of each game (team_games), with both owners. Within a tie, rows are ordered by
+# date (direction chosen per list to match the order the old queries happened to return), then owner.
 TEAM_WEEKS = """
     SELECT tg.season, tg.week, tg.is_playoffs, t.owner, t.team_id, tg.score, tg.opp_score,
            o.owner AS opponent
@@ -36,8 +38,6 @@ SEASON_TOTALS = """
         r.final_standing
     FROM records r
     JOIN teams t ON r.team_id = t.team_id
-    ORDER BY r.points_for {direction}
-    LIMIT $1
 """
 
 # Winning and losing streaks in one pass. A tie game ends a streak (it takes a row number but
@@ -69,14 +69,13 @@ STREAKS = """
         GROUP BY team_id, owner, won, grp
     ),
     ranked AS (
-        SELECT *, ROW_NUMBER() OVER (PARTITION BY won ORDER BY streak_length DESC,
-                                     start_season, start_week, owner) AS place
+        SELECT *, RANK() OVER (PARTITION BY won ORDER BY streak_length DESC) AS place
         FROM streaks
     )
     SELECT won, owner, team_id, streak_length, start_season, start_week, end_season, end_week
     FROM ranked
     WHERE place <= $1
-    ORDER BY won DESC, place
+    ORDER BY won DESC, streak_length DESC, start_season, start_week, owner
 """
 
 MARGINS = """
@@ -96,9 +95,12 @@ MARGINS = """
     LEFT JOIN teams t_winner ON m.winner_team_id = t_winner.team_id
     WHERE m.winner_team_id IS NOT NULL
       {extra}
-    ORDER BY m.margin {direction}
-    LIMIT $1
 """
+
+
+def ranked(query, value, direction, tie_break):
+    """top_n of LIST_SIZE by value; within a tie, tie_break (output column names)."""
+    return top_n(query, f"{value} {direction}", f"{value} {direction}, {tie_break}", "$1")
 
 
 def scores(rows):
@@ -121,34 +123,35 @@ async def get_records_summary():
     (careers, high_season, low_season, best_week, worst_week, streaks, losing, winning,
      blowouts, closest, tendencies) = await concurrently(
         career_totals,
-        lambda db: db.fetch(SEASON_TOTALS.format(direction="DESC"), LIST_SIZE),
-        lambda db: db.fetch(SEASON_TOTALS.format(direction="ASC"), LIST_SIZE),
-        lambda db: db.fetch(TEAM_WEEKS + "ORDER BY tg.score DESC, tg.season, tg.week, t.owner LIMIT $1", LIST_SIZE),
-        lambda db: db.fetch(TEAM_WEEKS + "ORDER BY tg.score ASC, tg.season, tg.week, t.owner LIMIT $1", LIST_SIZE),
+        lambda db: db.fetch(ranked(SEASON_TOTALS, "points_for", "DESC", "season, owner"), LIST_SIZE),
+        lambda db: db.fetch(ranked(SEASON_TOTALS, "points_for", "ASC", "season, owner"), LIST_SIZE),
+        lambda db: db.fetch(ranked(TEAM_WEEKS, "score", "DESC", "season, week, owner"), LIST_SIZE),
+        lambda db: db.fetch(ranked(TEAM_WEEKS, "score", "ASC", "season, week, owner"), LIST_SIZE),
         lambda db: db.fetch(STREAKS, LIST_SIZE),
         # Highest scores that still lost: the unluckiest weeks
-        lambda db: db.fetch(TEAM_WEEKS + "WHERE tg.result = 'L' ORDER BY tg.score DESC, tg.season, tg.week, t.owner LIMIT $1", LIST_SIZE),
+        lambda db: db.fetch(ranked(TEAM_WEEKS + "WHERE tg.result = 'L'", "score", "DESC", "season, week, owner"), LIST_SIZE),
         # Lowest scores that still won (against a team that scored): the luckiest weeks
-        lambda db: db.fetch(TEAM_WEEKS + "WHERE tg.result = 'W' AND tg.opp_score > 0 ORDER BY tg.score ASC, tg.season DESC, tg.week DESC, t.owner LIMIT $1", LIST_SIZE),
-        lambda db: db.fetch(MARGINS.format(extra="AND m.home_score > 0 AND m.away_score > 0", direction="DESC"), LIST_SIZE),
-        lambda db: db.fetch(MARGINS.format(extra="", direction="ASC"), LIST_SIZE),
+        lambda db: db.fetch(ranked(TEAM_WEEKS + "WHERE tg.result = 'W' AND tg.opp_score > 0", "score", "ASC",
+                                   "season DESC, week DESC, owner"), LIST_SIZE),
+        lambda db: db.fetch(ranked(MARGINS.format(extra="AND m.home_score > 0 AND m.away_score > 0"),
+                                   "margin", "DESC", "season, week"), LIST_SIZE),
+        lambda db: db.fetch(ranked(MARGINS.format(extra=""), "margin", "ASC", "season, week"), LIST_SIZE),
         draft_tendencies,
     )
-    streak_rows = [dict(r) for r in streaks]
-    strip = lambda r: {k: v for k, v in r.items() if k != "won"}
+    streak_rows = without(streaks, "won", "place")
     return {
         # all-time standings: owners with at least one finished season
         "standings":        [c for c in careers if c["seasons_played"]],
-        "highest_season":   season_points(high_season),
-        "lowest_season":    season_points(low_season),
-        "best_week":        scores(best_week),
-        "worst_week":       scores(worst_week),
-        "win_streaks":      [strip(r) for r in streak_rows if r["won"] == 1],
-        "loss_streaks":     [strip(r) for r in streak_rows if r["won"] == 0],
-        "highest_losing":   scores(losing),
-        "lowest_winning":   scores(winning),
-        "blowouts":         margins(blowouts),
-        "closest":          margins(closest),
+        "highest_season":   season_points(without(high_season)),
+        "lowest_season":    season_points(without(low_season)),
+        "best_week":        scores(without(best_week)),
+        "worst_week":       scores(without(worst_week)),
+        "win_streaks":      [r for r, s in zip(streak_rows, streaks) if s["won"] == 1],
+        "loss_streaks":     [r for r, s in zip(streak_rows, streaks) if s["won"] == 0],
+        "highest_losing":   scores(without(losing)),
+        "lowest_winning":   scores(without(winning)),
+        "blowouts":         margins(without(blowouts)),
+        "closest":          margins(without(closest)),
         "draft_tendencies": tendencies,
     }
 

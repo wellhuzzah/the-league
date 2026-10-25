@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.database import concurrently, get_pool
+from app.params import top_n, without
 
 router = APIRouter(
     prefix="/teams",
@@ -125,7 +126,8 @@ async def get_team(team_id: int):
             FROM team_games
             WHERE team_id = $1
         """, team_id),
-        lambda db: db.fetch("""
+        # Best 20 single-player games, plus any tied with the 20th
+        lambda db: db.fetch(top_n("""
             SELECT
                 bs.season,
                 bs.week,
@@ -134,15 +136,14 @@ async def get_team(team_id: int):
                 bs.points_scored,
                 bs.is_starter,
                 tg.is_playoffs,
-                opp.owner AS opponent
+                opp.owner AS opponent,
+                bs.espn_player_id
             FROM box_scores bs
             JOIN team_games tg ON tg.matchup_id = bs.matchup_id AND tg.team_id = bs.team_id
             JOIN teams opp ON opp.team_id = tg.opp_id
             WHERE bs.team_id = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.espn_player_id
-            LIMIT 20
-        """, team_id),
+        """, "points_scored DESC", "points_scored DESC, season, week, espn_player_id", "20"), team_id),
         lambda db: db.fetch("""
             SELECT
                 bs.season,
@@ -225,6 +226,7 @@ async def get_team(team_id: int):
             }
             for row in h2h
         ],
-        "best_weeks": [{**dict(row), "points_scored": float(row["points_scored"])} for row in best_weeks],
+        "best_weeks": [{**row, "points_scored": float(row["points_scored"])}
+                       for row in without(best_weeks, "place", "espn_player_id")],
         "position_totals": list(by_season.values()),
     }
