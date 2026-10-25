@@ -151,3 +151,15 @@ ALTER TABLE box_scores ADD COLUMN is_starter boolean
 
 COMMIT;
 ANALYZE box_scores, espn_team_map, matchups;
+
+-- ===========================================================================
+-- 6. box_scores.played   (2026-10-25, audit Phase 3 follow-up)
+-- ===========================================================================
+-- Did the player play that week? From ESPN's actual stat line: played = it has a stat beyond the team
+-- result (won/lost/tied, stats 155-157). A bye or no NFL team has no line at all; inactive/injured has
+-- a team-result-only line. This matches ESPN's games-played stat (210) on all 14,839 2019+ starts;
+-- 2018 responses lack 210. espn_import.py writes it; existing rows were filled from espn_raw by
+-- scripts\backfill_played.py (29,557 rows, every one matched its archived points). NULL = unknown.
+-- Used to keep did-not-play weeks out of the position explorer's lowest scores.
+
+ALTER TABLE box_scores ADD COLUMN played boolean;

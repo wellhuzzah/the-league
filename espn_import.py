@@ -140,6 +140,21 @@ def actual_points(player_obj, week):
 	return stat_total(player_obj, week, 0)
 
 
+# ESPN sends the team's result (won / lost / tied) in a player's stat line even when the player didn't play
+TEAM_RESULT_STATS = {"155", "156", "157"}
+
+
+def played_game(player_obj, week):
+	"""True if the player played that week: their ACTUAL stat line has a stat beyond the team result.
+	A bye, or no NFL team, means no stat line at all; inactive or injured means a team-result-only
+	line. Matches ESPN's games-played stat (210) on every 2019+ start (14,839 of them); 2018
+	responses don't carry 210, so this test is used for every season."""
+	for st in (player_obj or {}).get("stats", []) or []:
+		if st.get("scoringPeriodId") == week and st.get("statSourceId") == 0:
+			return any(k not in TEAM_RESULT_STATS for k in (st.get("stats") or {}))
+	return False
+
+
 def parse_weeks(spec):
 	"""'1-13' / '14,15,16' / '1-3,14' -> set of ints."""
 	weeks = set()
@@ -382,7 +397,7 @@ async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks
 						"espn_player_id": pid, "player_name": name, "position": pos,
 						"lineup_slot": slot, "is_starter": is_starter,
 						"points": dec(pts), "projected": dec(stat_total(pobj, week, 1)),
-						"has_stats": has_stats,
+						"has_stats": has_stats, "played": played_game(pobj, week),
 					})
 
 				if n_starters != EXPECTED_STARTERS:
@@ -441,17 +456,18 @@ async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks
 				res = await conn.fetchrow("""
 					INSERT INTO box_scores (matchup_id, team_id, season, week, espn_player_id,
 					                        player_name, nfl_team, position, lineup_slot,
-					                        points_scored, projected_points, has_stats)
-					VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11)
+					                        points_scored, projected_points, has_stats, played)
+					VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, $10, $11, $12)
 					ON CONFLICT (matchup_id, team_id, espn_player_id, week)
 					DO UPDATE SET points_scored = EXCLUDED.points_scored,
 					              projected_points = EXCLUDED.projected_points,
 					              lineup_slot = EXCLUDED.lineup_slot,
-					              has_stats = EXCLUDED.has_stats
+					              has_stats = EXCLUDED.has_stats,
+					              played = EXCLUDED.played
 					RETURNING (xmax = 0) AS inserted
 				""", r["matchup_id"], r["team_id"], dec(season), r["week"], r["espn_player_id"],
 				     r["player_name"], r["position"], r["lineup_slot"],
-				     r["points"], r["projected"], r["has_stats"])
+				     r["points"], r["projected"], r["has_stats"], r["played"])
 				if res["inserted"]:
 					ins += 1
 				else:

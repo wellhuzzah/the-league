@@ -16,4 +16,7 @@ ALTER TABLE box_scores ADD CONSTRAINT box_scores_starter_from_slot
 -- Was NULL in all 248 rows, read and written by nothing.
 ALTER TABLE espn_team_map ADD COLUMN IF NOT EXISTS team_name character varying(100);
 
+-- Added after Phase 3 (schema_v3.sql section 6); the pre-Phase-3 importer doesn't know it.
+ALTER TABLE box_scores DROP COLUMN IF EXISTS played;
+
 COMMIT;
