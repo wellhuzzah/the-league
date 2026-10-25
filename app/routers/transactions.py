@@ -447,7 +447,8 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 @router.get("/records/most-contested")
 async def get_most_contested(limit: int = Limit(25), season: int = None):
 	"""Players claimed by the most distinct teams in a single waiver run. Counts the winning claim and
-	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out."""
+	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out.
+	A pickup only one team claimed wasn't contested and isn't listed."""
 	async with (await get_pool()).acquire() as db:
 		rows = await db.fetch(top_n(f"""
 			WITH claims AS (
@@ -475,6 +476,7 @@ async def get_most_contested(limit: int = Limit(25), season: int = None):
 				         ORDER BY c.bid_amount DESC, c.owner, c.id)::text     AS bids
 			FROM claims c
 			GROUP BY c.season, c.run_date, c.espn_player_id
+			HAVING COUNT(DISTINCT c.team_id) > 1
 		""", "teams DESC", "teams DESC, claims DESC, winning_bid DESC NULLS LAST, season, run_date, espn_player_id", "$1"),
 			limit, LOSING_BID_SEASONS, season)
 		return [{**row, "bids": json.loads(row["bids"])} for row in without(rows)]

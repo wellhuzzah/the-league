@@ -10,6 +10,9 @@ router = APIRouter(
 
 # Every pick with its drafted player's regular-season starter points that season.
 # By id, not name: names collide (2010 has two drafted Mike Williamses).
+# Value (steals/busts) only means something for seasons with box scores (2018 on): before that every
+# pick has 0 points, so those seasons get no ranking.
+SCORED_SEASONS = "SELECT DISTINCT season FROM box_scores"
 PICK_VALUE = """
     SELECT
         dp.season,
@@ -180,9 +183,9 @@ async def search_player_draft_history(player_name: str):
 
 @router.get("/value/history")
 async def get_value_history(limit: int = Limit(25)):
-    """All-time best steals and busts across every draft season."""
+    """All-time best steals and busts across every draft season with box scores (2018 on)."""
     async with (await get_pool()).acquire() as db:
-        rows = await db.fetch(PICK_VALUE.format(where=""))
+        rows = await db.fetch(PICK_VALUE.format(where=f"WHERE dp.season IN ({SCORED_SEASONS})"))
 
     by_season = defaultdict(list)
     for row in rows:
@@ -219,9 +222,11 @@ def with_ties(ranked, limit, key):
 async def get_draft(year: int):
     """Everything the Draft page shows for a season, from one query: the board by round, and the
     value table (draft position against season scoring) with the steal and the bust. The page
-    groups picks by team itself."""
+    groups picks by team itself. A season without box scores (before 2018) has no value ranking:
+    value.scoring is false and its picks, steal and bust are empty."""
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch(PICK_VALUE.format(where="WHERE dp.season = $1"), year)
+        has_scoring = await db.fetchval("SELECT EXISTS (SELECT 1 FROM box_scores WHERE season = $1)", year)
     if not rows:
         raise HTTPException(status_code=404, detail="Draft not found")
 
@@ -237,19 +242,22 @@ async def get_draft(year: int):
             "team_id":       row["team_id"],
         })
 
-    picks = [value_pick(row, with_season=False) for row in rows]
-    scored = rank_season(picks)
-    steal = max(scored, key=lambda p: p["value_gap"]) if scored else None
-    early = [p for p in picks if p["round_num"] <= 2]
-    bust  = min(early, key=lambda p: p["season_points"]) if early else None
+    picks, steal, bust = [], None, None
+    if has_scoring:
+        picks = [value_pick(row, with_season=False) for row in rows]
+        scored = rank_season(picks)
+        steal = max(scored, key=lambda p: p["value_gap"]) if scored else None
+        early = [p for p in picks if p["round_num"] <= 2]
+        bust  = min(early, key=lambda p: p["season_points"]) if early else None
 
     return {
         "season": year,
         "rounds": [{"round": r, "picks": p} for r, p in sorted(rounds.items())],
         "value": {
-            "season": year,
-            "picks":  sorted(picks, key=lambda p: p["value_gap"], reverse=True),
-            "steal":  steal,
-            "bust":   bust,
+            "season":  year,
+            "scoring": has_scoring,
+            "picks":   sorted(picks, key=lambda p: p["value_gap"], reverse=True),
+            "steal":   steal,
+            "bust":    bust,
         },
     }

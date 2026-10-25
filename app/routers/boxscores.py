@@ -215,7 +215,8 @@ async def get_position_summary(position: str):
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
         """, "points_scored DESC", "points_scored DESC, season, week, team_id, espn_player_id", "10"), pos),
-        # Bottom 5 single-game scores
+        # Bottom 5 single-game scores, among weeks the player actually played (a K or D/ST can
+        # genuinely score 0; a starter who was inactive or on bye isn't a low score)
         lambda db: db.fetch(top_n("""
             SELECT
                 bs.player_name,
@@ -231,6 +232,7 @@ async def get_position_summary(position: str):
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
+              AND bs.played IS DISTINCT FROM FALSE
         """, "points_scored ASC", "points_scored ASC, season, week, team_id, espn_player_id", "5"), pos),
         # Most appearances (most rostered players at this position)
         lambda db: db.fetch(top_n("""
