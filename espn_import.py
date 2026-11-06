@@ -257,11 +257,18 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 			win_id = a_id
 		else:  # TIE (or anything non-UNDECIDED without a side)
 			win_id = None
+		# NONE in the regular season; WINNERS_BRACKET / WINNERS_CONSOLATION_LADDER /
+		# LOSERS_CONSOLATION_LADDER in the playoffs (luck counts only winners-bracket playoff games)
+		tier = item.get("playoffTierType")
+		is_playoffs = week >= (REG_SEASON_WEEKS + 1)
+		if tier is None or (tier != "NONE") != is_playoffs:
+			warnings.append(f"matchup wk{week}: bracket label {tier!r} doesn't fit a "
+			                f"{'playoff' if is_playoffs else 'regular-season'} week.")
 		decided.append({
-			"week": week, "is_playoffs": week >= (REG_SEASON_WEEKS + 1),
+			"week": week, "is_playoffs": is_playoffs,
 			"h_id": h_id, "a_id": a_id,
 			"h_score": h_score, "a_score": a_score, "win_id": win_id,
-			"winner": winner,
+			"winner": winner, "tier": tier,
 		})
 		per_week[week] += 1
 
@@ -271,22 +278,23 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 	ins = upd = 0
 	for m in decided:
 		if dry_run:
-			print(f"  DRY wk{m['week']} playoff={m['is_playoffs']} "
+			print(f"  DRY wk{m['week']} playoff={m['is_playoffs']} tier={m['tier']} "
 			      f"home {m['h_id']}={m['h_score']} away {m['a_id']}={m['a_score']} "
 			      f"winner={m['winner']}({m['win_id']})")
 			continue
 		row = await conn.fetchrow("""
 			INSERT INTO matchups (season, week, is_playoffs, home_team_id, away_team_id,
-			                      home_score, away_score, winner_team_id)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			                      home_score, away_score, winner_team_id, playoff_tier)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (season, week, home_team_id, away_team_id)
 			DO UPDATE SET home_score = EXCLUDED.home_score,
 			              away_score = EXCLUDED.away_score,
 			              winner_team_id = EXCLUDED.winner_team_id,
-			              is_playoffs = EXCLUDED.is_playoffs
+			              is_playoffs = EXCLUDED.is_playoffs,
+			              playoff_tier = COALESCE(EXCLUDED.playoff_tier, matchups.playoff_tier)
 			RETURNING id, (xmax = 0) AS inserted
 		""", dec(season), m["week"], m["is_playoffs"], m["h_id"], m["a_id"],
-		     dec(m["h_score"]), dec(m["a_score"]), m["win_id"])
+		     dec(m["h_score"]), dec(m["a_score"]), m["win_id"], m["tier"])
 		id_map[(m["week"], m["h_id"], m["a_id"])] = row["id"]
 		if row["inserted"]:
 			ins += 1

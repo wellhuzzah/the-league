@@ -1,8 +1,9 @@
 # Rolls back audit Phase 3 (2026-10-22). Run from an elevated PowerShell:
 #   powershell -ExecutionPolicy Bypass -File C:\projects\rockwood\scripts\rollback_phase3.ps1
 #
-# 1. database: rollback_phase3.sql, then draft_order and box_scores_backup_20261007 restored from
-#    the pre-phase3 dump (filtered pg_restore)
+# 1. database: rollback_phase3.sql (which also drops the later box_scores.played and
+#    matchups.playoff_tier columns), then draft_order and box_scores_backup_20261007 restored from
+#    the pre-phase3 dump (filtered pg_restore). To undo only playoff_tier: rollback_playoff_tier.sql
 # 2. both repos back to the pre-phase3 tag; Phase 3 commits kept on branch phase3-rolled-back,
 #    uncommitted changes stashed
 # 3. rockwood-ui\dist replaced by dist-pre-phase3: that alone restores the live site (no rebuild).

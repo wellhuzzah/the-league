@@ -21,6 +21,7 @@ __pycache__/
 *.sql
 !/schema_v3.sql
 !/scripts/rollback_phase3.sql
+!/scripts/rollback_playoff_tier.sql
 /espn_raw/
 /backups/
 /docs/*

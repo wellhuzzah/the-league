@@ -163,3 +163,38 @@ ANALYZE box_scores, espn_team_map, matchups;
 -- Used to keep did-not-play weeks out of the position explorer's lowest scores.
 
 ALTER TABLE box_scores ADD COLUMN played boolean;
+
+-- ===========================================================================
+-- 7. matchups.playoff_tier   (2026-11-05, post-audit item 1: luck formula)
+-- ===========================================================================
+-- ESPN's playoffTierType for the game: NONE (regular season), WINNERS_BRACKET,
+-- WINNERS_CONSOLATION_LADDER (3rd/5th/7th-place games) or LOSERS_CONSOLATION_LADDER. NULL = unknown.
+-- Luck counts playoff games only when this is WINNERS_BRACKET. espn_import.py writes it (and warns
+-- when a label doesn't fit the week); existing rows were filled from espn_raw by
+-- scripts\backfill_playoff_tier.py (all 1,926 rows matched an archived game, scores checked).
+-- team_games gains the column at the end; CREATE OR REPLACE keeps the view's grants.
+-- rockwood_writer's INSERT/UPDATE on matchups covers it; no grant change.
+-- Undo: scripts\rollback_playoff_tier.sql (also part of rollback_phase3.sql).
+
+BEGIN;
+
+ALTER TABLE matchups ADD COLUMN playoff_tier text;
+
+CREATE OR REPLACE VIEW team_games AS
+SELECT m.id AS matchup_id, m.season, m.week, m.is_playoffs,
+       m.home_team_id AS team_id, m.away_team_id AS opp_id,
+       m.home_score AS score, m.away_score AS opp_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.home_team_id THEN 'W' ELSE 'L' END AS result,
+       m.playoff_tier
+FROM matchups m
+UNION ALL
+SELECT m.id, m.season, m.week, m.is_playoffs,
+       m.away_team_id, m.home_team_id,
+       m.away_score, m.home_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.away_team_id THEN 'W' ELSE 'L' END,
+       m.playoff_tier
+FROM matchups m;
+
+COMMIT;

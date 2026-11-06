@@ -19,4 +19,7 @@ ALTER TABLE espn_team_map ADD COLUMN IF NOT EXISTS team_name character varying(1
 -- Added after Phase 3 (schema_v3.sql section 6); the pre-Phase-3 importer doesn't know it.
 ALTER TABLE box_scores DROP COLUMN IF EXISTS played;
 
+-- Added after Phase 3 (schema_v3.sql section 7); the view that read it is already dropped above.
+ALTER TABLE matchups DROP COLUMN IF EXISTS playoff_tier;
+
 COMMIT;
