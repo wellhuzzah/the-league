@@ -19,6 +19,10 @@ log line also goes through weekly_maintenance.redacted(). One line per run goes 
 ddns_update.log. ddns_update.state (gitignored) counts consecutive failures; on the 3rd in a row a
 message goes to NOTIFY_WEBHOOK_URL, and another when it recovers.
 
+After every successful run (record unchanged or updated; not --dry-run), DDNS_HEALTHCHECK_URL is
+pinged, so runs that stop or keep failing are noticed off this machine. Failed runs send nothing.
+Unset: one WARN line, and the run carries on. A missing or failed ping never changes the exit code.
+
 Exit codes: 0 ok (unchanged, updated, or dry run), 1 failed.
 """
 
@@ -145,6 +149,17 @@ def notify(text):
 		log("notify", f"FAIL: {type(e).__name__}")    # never the URL
 
 
+def ping_healthcheck():
+	url = os.getenv("DDNS_HEALTHCHECK_URL")
+	if not url:
+		log("WARN", "DDNS_HEALTHCHECK_URL is not set; no healthcheck ping sent")
+		return
+	try:
+		requests.post(url, timeout=TIMEOUT).raise_for_status()
+	except requests.RequestException as e:
+		log("notify", f"FAIL: healthcheck: {type(e).__name__}")    # never the URL
+
+
 def main():
 	ap = argparse.ArgumentParser(description="Point theleague.letsfriggen.party at this network's public IP.")
 	ap.add_argument("--dry-run", action="store_true", help="look up both and print what would change; no edit call")
@@ -176,6 +191,10 @@ def main():
 		if failures() >= NOTIFY_AFTER:
 			notify(f"Rockwood DDNS: {name} recovered after {failures()} failures.")
 		set_failures(0)
+		try:
+			ping_healthcheck()
+		except Exception as e:    # a ping never changes the exit code
+			log("notify", f"FAIL: healthcheck crashed: {type(e).__name__}")
 	return 0
 
 

@@ -37,6 +37,7 @@ Notifications (optional, set in .env; nothing is sent when unset):
 	HEALTHCHECK_URL     healthchecks.io-style ping URL: pinged on success, URL + "/fail" on
 	                    failure. Its own schedule alerts you if the task stops running at all.
 	Message text is this run's log lines with every .env value replaced by [redacted].
+	A failed or crashing alert never changes the exit code.
 weekly_maintenance.last_success (gitignored) holds the time of the last fully successful run.
 
 Manual override, interactive use only (see docs/weekly_maintenance_runbook.md):
@@ -165,6 +166,15 @@ def run(step, label, args, timeout=1800):
 def last_line(text):
 	lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
 	return lines[-1][:200] if lines else "(no output)"
+
+
+def first_failure(out):
+	"""A nightly_backup run's first failing step (its first FAIL line), not a later notify line."""
+	for l in out.splitlines():
+		m = re.match(r"\S+ (\S+)\s+FAIL ", l.strip())
+		if m and m.group(1) != "notify":
+			return l.strip()[:200]
+	return last_line(out)
 
 
 async def db_fetch(sql, *args):
@@ -536,7 +546,7 @@ def step_waivers(season, accept):
 def step_backup():
 	code, out = run("backup", "run", ["nightly_backup.py", "--push"])
 	if code:
-		log("backup", "FAIL", f"exit={code}: {last_line(out)}")
+		log("backup", "FAIL", f"exit={code}: {first_failure(out)}")
 		return False
 	push = next((l for l in out.splitlines() if " push " in l), last_line(out))
 	log("backup", "ok", push.split(" ok ", 1)[-1].strip()[:200])
@@ -629,8 +639,12 @@ def main():
 	if not failed:
 		with open(LAST_SUCCESS, "w") as f:
 			f.write(datetime.now(timezone.utc).isoformat())
-	notify(failed, stale_days)
-	return sum(STEP_BITS[s] for s in failed)
+	code = sum(STEP_BITS[s] for s in failed)
+	try:
+		notify(failed, stale_days)
+	except Exception as e:    # alerting never changes the run's own result
+		log("notify", "FAIL", f"crashed: {type(e).__name__}")    # no message text: it can hold a URL
+	return code
 
 
 if __name__ == "__main__":

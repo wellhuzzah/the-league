@@ -25,7 +25,9 @@ Steps, each independent (a failure is reported and the next step still runs):
 
 Failure alert: NOTIFY_WEBHOOK_URL (the Discord hook weekly_maintenance uses) gets the failed steps.
 BACKUP_HEALTHCHECK_URL (optional, a separate daily healthchecks.io check) is pinged on success and
-/fail on failure. HEALTHCHECK_URL is weekly_maintenance's weekly check and is never pinged here.
+/fail on failure; when it is unset a WARN line is logged and the run carries on. HEALTHCHECK_URL is
+weekly_maintenance's weekly check and is never pinged here. A missing, unreachable or failing alert
+never changes the exit code.
 
 One line per run goes to logs/nightly_backup.log. Exit code: sum of 1 dump, 2 espn_raw, 4 logs, 8 push,
 16 docs.
@@ -185,6 +187,8 @@ def notify(failed):
 	hc = os.getenv("BACKUP_HEALTHCHECK_URL")
 	if hc:
 		sends.append(("healthcheck", hc if not failed else hc.rstrip("/") + "/fail", {"data": text.encode("utf-8")}))
+	else:
+		log("notify", "WARN", "BACKUP_HEALTHCHECK_URL is not set; no healthcheck ping sent")
 	hook = os.getenv("NOTIFY_WEBHOOK_URL")
 	if hook and failed:
 		sends.append(("webhook", hook, webhook_body(hook, text)))
@@ -225,8 +229,12 @@ def main():
 		except Exception as e:
 			log("push", "FAIL", f"{type(e).__name__}: {e}"[:300])
 			failed.append("push")
-	notify(failed)
-	return sum(STEP_BITS[s] for s in failed)
+	code = sum(STEP_BITS[s] for s in failed)
+	try:
+		notify(failed)
+	except Exception as e:    # alerting never changes the job's own result
+		log("notify", "FAIL", f"crashed: {type(e).__name__}")    # no message text: it can hold a URL
+	return code
 
 
 if __name__ == "__main__":
