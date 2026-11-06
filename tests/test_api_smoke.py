@@ -209,6 +209,20 @@ class ApiSmoke(unittest.TestCase):
 				problem = shape_problem(body, SHAPES[url])
 				self.assertIsNone(problem, f"{url}: {problem}")
 
+	def test_luck_adds_up(self):
+		# Luck sums to 0 over the league (up to each row's rounding to 0.01), per season and career;
+		# career counts every season, the in-progress one included.
+		get = lambda url: json.load(urllib.request.urlopen(self.base + url, timeout=60))
+		team_seasons = 0
+		for s in get("/seasons/"):
+			luck = get(f"/seasons/{s['season']}")["luck"]
+			with self.subTest(season=s["season"]):
+				self.assertLessEqual(abs(sum(r["luck"] for r in luck)), 0.005 * len(luck) + 1e-9)
+			team_seasons += len(luck)
+		career = get("/records/luck")
+		self.assertLessEqual(abs(sum(r["luck"] for r in career)), 0.005 * len(career) + 1e-9)
+		self.assertEqual(sum(r["seasons"] for r in career), team_seasons)
+
 
 if __name__ == "__main__":
 	unittest.main()

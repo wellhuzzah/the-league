@@ -1,10 +1,8 @@
-import math
-
 from fastapi import APIRouter
 from app.database import concurrently
 from app.params import top_n, without
 from app.routers.draft import draft_tendencies
-from app.routers.seasons import all_luck
+from app.routers.seasons import career_luck
 from app.routers.teams import career_totals
 
 router = APIRouter(
@@ -156,34 +154,9 @@ async def get_records_summary():
     }
 
 
-def js_round_2(x):
-    """Math.round(x * 100) / 100 as JavaScript computes it (halves round up), so these numbers are
-    exactly what the page used to compute in the browser."""
-    v = x * 100
-    f = math.floor(v)
-    return (f + 1 if v - f >= 0.5 else f) / 100
-
-
 @router.get("/luck")
 async def get_career_luck():
-    """Career luck per owner over finished seasons (an in-progress season would shift it weekly).
-    Seasons are added newest first, each in luck order, the way the page used to sum them."""
-    async def finished_luck(db):
-        finished = {r["season"] for r in await db.fetch("SELECT DISTINCT season FROM records")}
-        return [r for r in await all_luck(db) if r["season"] in finished]
-    (rows,) = await concurrently(finished_luck)
-    by_owner = {}
-    for r in rows:
-        o = by_owner.setdefault(r["owner"], {"owner": r["owner"], "seasons": 0, "actual_wins": 0,
-                                             "expected_wins": 0.0, "luck": 0.0})
-        o["seasons"] += 1
-        o["actual_wins"] += r["actual_wins"]
-        o["expected_wins"] += float(r["expected_wins"])
-        o["luck"] += float(r["luck"])
-    return [
-        {**o,
-         "expected_wins": js_round_2(o["expected_wins"]),
-         "luck":          js_round_2(o["luck"]),
-         "bps":           js_round_2(o["luck"] / o["seasons"])}
-        for o in by_owner.values()
-    ]
+    """Career luck per owner over every season, the in-progress one included (definition: LUCK_WEEKS
+    in seasons.py). Summed from the weeks, so it isn't the sum of the rounded season values."""
+    (rows,) = await concurrently(career_luck)
+    return rows

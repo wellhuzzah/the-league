@@ -34,30 +34,54 @@ IN_PROGRESS_STANDINGS = """
     GROUP BY t.team_id, t.owner
 """
 
-# Luck for every season in one pass (audit Q7): "beaten" is how many scores that week were lower
-# (rank - 1). Expected wins keep the original formula exactly, beaten / (beaten - 1) per week, NULL
-# when beaten = 1, so the numbers on the site don't change. (That is not "share of the league
-# beaten"; see the audit's Phase 3 notes.) Ties in luck: more actual wins first, then owner (the
-# old query left ties to the plan; this order matches it in 3 of the 4 tied pairs on record).
-LUCK_SQL = """
-    WITH weekly AS (
-        SELECT tg.season, tg.week, tg.team_id, t.owner,
-               CASE WHEN tg.result = 'W' THEN 1 ELSE 0 END                     AS actual_win,
-               rank() OVER (PARTITION BY tg.season, tg.week ORDER BY tg.score) - 1 AS beaten
+# Luck (the Bullshit Index), per team-week: the actual result (W 1, T 0.5, L 0, from the stored
+# matchup result, so it follows any later decision on a recorded winner) minus the expected result,
+# the share of that week's pool the team outscored, an equal score counting half. The pool is every
+# regular-season game and, in the playoffs, winners-bracket games only (matchups.playoff_tier):
+# consolation games and byes count for nothing, and a game where either side scored 0 drops both
+# teams. So every week sums to 0 across the league. Season and career luck are sums over weeks.
+LUCK_WEEKS = """
+    WITH games AS (
+        SELECT tg.season, tg.week, tg.team_id, tg.score,
+               CASE tg.result WHEN 'W' THEN 1 WHEN 'T' THEN 0.5 ELSE 0 END AS actual
         FROM team_games tg
-        JOIN teams t ON t.team_id = tg.team_id
-        WHERE NOT tg.is_playoffs {where}
+        WHERE (NOT tg.is_playoffs OR tg.playoff_tier = 'WINNERS_BRACKET')
+          AND tg.score > 0 AND tg.opp_score > 0 {where}
+    ),
+    weekly AS (
+        SELECT season, week, team_id, actual,
+               (rank() OVER (PARTITION BY season, week ORDER BY score) - 1                -- outscored
+                + (count(*) OVER (PARTITION BY season, week, score) - 1) / 2.0)          -- equal: half
+               / NULLIF(count(*) OVER (PARTITION BY season, week) - 1, 0) AS expected
+        FROM games
     )
-    SELECT
-        season,
-        team_id,
-        owner,
-        SUM(actual_win)                                                         AS actual_wins,
-        ROUND(SUM(beaten::float / NULLIF(beaten - 1, 0))::numeric, 2)           AS expected_wins,
-        ROUND((SUM(actual_win) - SUM(beaten::float / NULLIF(beaten - 1, 0)))::numeric, 2) AS luck
-    FROM weekly
-    GROUP BY season, team_id, owner
-    ORDER BY season DESC, luck DESC, actual_wins DESC, owner
+"""
+
+# Ties in luck: more actual wins first, then owner.
+LUCK_SQL = LUCK_WEEKS + """
+    SELECT w.season, w.team_id, t.owner,
+           SUM(w.actual)                      AS actual_wins,
+           ROUND(SUM(w.expected), 2)          AS expected_wins,
+           ROUND(SUM(w.actual - w.expected), 2) AS luck
+    FROM weekly w
+    JOIN teams t ON t.team_id = w.team_id
+    GROUP BY w.season, w.team_id, t.owner
+    ORDER BY w.season DESC, luck DESC, actual_wins DESC, t.owner
+"""
+
+# Career luck per owner over every season, the in-progress one included (as the all-time records
+# are); bps is luck per season.
+CAREER_LUCK_SQL = LUCK_WEEKS + """
+    SELECT t.owner,
+           count(DISTINCT w.season)           AS seasons,
+           SUM(w.actual)                      AS actual_wins,
+           ROUND(SUM(w.expected), 2)          AS expected_wins,
+           ROUND(SUM(w.actual - w.expected), 2) AS luck,
+           ROUND(SUM(w.actual - w.expected) / count(DISTINCT w.season), 2) AS bps
+    FROM weekly w
+    JOIN teams t ON t.team_id = w.team_id
+    GROUP BY t.owner
+    ORDER BY luck DESC, t.owner
 """
 
 
@@ -70,9 +94,8 @@ async def season_luck(db, year):
     return [luck_entry(r) for r in await db.fetch(LUCK_SQL.format(where="AND tg.season = $1"), year)]
 
 
-async def all_luck(db):
-    """Luck rows for every season, newest first, each season ordered by luck."""
-    return await db.fetch(LUCK_SQL.format(where=""))
+async def career_luck(db):
+    return [dict(r) for r in await db.fetch(CAREER_LUCK_SQL.format(where=""))]
 
 
 def rank_in_progress(rows):
