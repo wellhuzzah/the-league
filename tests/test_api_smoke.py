@@ -92,7 +92,7 @@ SHAPES = {
 	'/draft/value/history': ("dict", ['busts', 'steals']),
 	'/draft/2025': ("dict", ['rounds', 'season', 'value']),
 	'/draft/2012': ("dict", ['rounds', 'season', 'value']),
-	'/matchups/h2h/1/2': ("dict", ['games', 'playoff_games', 'regular_season_games', 'team_a_id', 'team_a_wins', 'team_b_id', 'team_b_wins', 'ties', 'total_games']),
+	'/matchups/h2h/1/2': ("dict", ['games', 'playoff_games', 'regular_season_games', 'team_a_id', 'team_a_wins', 'team_b_id', 'team_b_wins', 'ties', 'toilet_games', 'total_games']),
 	'/matchups/random-h2h': ("dict", ['highlights', 'summary', 'team_a', 'team_b']),
 	'/teams/': ("list", ['championships', 'first_season', 'last_season', 'most_points_seasons', 'owner', 'ppg', 'sackos', 'seasons_played', 'team_id', 'total_draws', 'total_losses', 'total_points_against', 'total_points_for', 'total_wins', 'win_pct'], 1),
 	'/teams/1': ("dict", ['best_weeks', 'career', 'h2h', 'owner', 'position_totals', 'seasons', 'team_id']),
