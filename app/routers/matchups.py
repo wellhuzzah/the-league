@@ -54,7 +54,7 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
         b_wins   = sum(1 for g in games if g["winner"] == "B")
         ties     = sum(1 for g in games if g["winner"] == "TIE")
         reg      = [g for g in games if not g["is_playoffs"]]
-        playoffs = [g for g in games if is_winners_bracket(g)]
+        playoffs = [g for g in games if is_playoff_game(g)]
 
         return {
             "team_a_id":    team_id_a,
@@ -69,10 +69,13 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
         }
 
 
-def is_winners_bracket(game):
-    """A playoff game that counts as one: winners bracket only. is_playoffs is every game from
-    week 14 on, so it also covers the consolation ladders (3rd/5th place and the toilet bowl)."""
-    return game["playoff_tier"] == "WINNERS_BRACKET"
+# Playoff games: the winners bracket and its consolation ladder (3rd/5th/7th place). is_playoffs is
+# every game from week 14 on, so it also covers the losers' ladder, the toilet bowl.
+PLAYOFF_TIERS = ("WINNERS_BRACKET", "WINNERS_CONSOLATION_LADDER")
+
+
+def is_playoff_game(game):
+    return game["playoff_tier"] in PLAYOFF_TIERS
 
 
 async def pair_games(a_id, b_id):
@@ -97,7 +100,7 @@ def h2h_highlights(a_id, b_id, games, owner):
     a_wins     = sum(1 for g in games if g["winner_team_id"] == a_id)
     b_wins     = sum(1 for g in games if g["winner_team_id"] == b_id)
     ties       = sum(1 for g in games if g["winner_team_id"] is None)
-    playoff_games = [g for g in games if is_winners_bracket(g)]
+    playoff_games = [g for g in games if is_playoff_game(g)]
 
     # Scores from each team's perspective
     def team_score(g, team_id):

@@ -1,6 +1,7 @@
 r"""
-Playoff games are winners-bracket games only. matchups.is_playoffs is every game from week 14 on
-(consolation ladders included); the H2H playoff counts use matchups.playoff_tier.
+Playoff games are the winners bracket and its consolation ladder (3rd/5th/7th place); the losers'
+ladder is the toilet bowl. matchups.is_playoffs is every game from week 14 on, so the H2H playoff
+counts use matchups.playoff_tier.
 
 	venv\Scripts\python.exe -B -m unittest tests.test_playoff_tier -v
 
@@ -22,7 +23,7 @@ API_URL = dotenv_values(os.path.join(ROOT, ".env")).get("API_DATABASE_URL")
 if API_URL:
 	os.environ.setdefault("API_DATABASE_URL", API_URL)   # app.database refuses to import without it
 
-from app.routers.matchups import h2h_highlights, is_winners_bracket  # noqa: E402
+from app.routers.matchups import h2h_highlights, is_playoff_game  # noqa: E402
 
 
 def game(week, tier, home=1, away=2, hs=100.0, as_=90.0):
@@ -44,21 +45,22 @@ def fetch(sql, *args):
 
 
 class Highlights(unittest.TestCase):
-	def test_playoff_count_is_winners_bracket_only(self):
+	def test_playoff_count_leaves_out_the_toilet_bowl(self):
 		games = [game(3, "NONE"), game(14, "WINNERS_BRACKET"), game(15, "WINNERS_CONSOLATION_LADDER"),
 		         game(16, "LOSERS_CONSOLATION_LADDER", hs=150.0)]
 		h = h2h_highlights(1, 2, games, {1: "a", 2: "b"})
-		self.assertEqual(h["summary"]["playoff_games"], 1)
+		self.assertEqual(h["summary"]["playoff_games"], 2)
 		self.assertEqual(h["summary"]["total_games"], 4)
 		# a's best game was the toilet bowl: week 14+, not a playoff game, and the tier says so
 		best = h["highlights"]["team_a_best"]
 		self.assertEqual((best["week"], best["is_playoffs"], best["playoff_tier"]),
 		                 (16, True, "LOSERS_CONSOLATION_LADDER"))
 
-	def test_is_winners_bracket(self):
-		self.assertTrue(is_winners_bracket(game(17, "WINNERS_BRACKET")))
-		for tier in ("NONE", "WINNERS_CONSOLATION_LADDER", "LOSERS_CONSOLATION_LADDER", None):
-			self.assertFalse(is_winners_bracket(game(16, tier)))
+	def test_is_playoff_game(self):
+		for tier in ("WINNERS_BRACKET", "WINNERS_CONSOLATION_LADDER"):
+			self.assertTrue(is_playoff_game(game(17, tier)))
+		for tier in ("NONE", "LOSERS_CONSOLATION_LADDER", None):
+			self.assertFalse(is_playoff_game(game(16, tier)))
 
 
 @unittest.skipUnless(API_URL, "API_DATABASE_URL not set in .env")
