@@ -1,6 +1,8 @@
 # Weekly maintenance runbook
 
-`weekly_maintenance.py` runs every Thursday at 08:00 (Task Scheduler: *Rockwood Weekly Maintenance*).
+`weekly_maintenance.py` runs every Thursday at 07:00 Eastern standard time, 08:00 during daylight
+saving time (Task Scheduler: *Rockwood Weekly Maintenance*; the trigger is pinned to UTC−5, 12:00Z,
+and is deliberately left that way).
 Each run writes one line per step to `weekly_maintenance.log`; the full output of every dry and
 live run is in `maintenance_output/<time>_<step>_<dry|live|run>.txt`. Start there.
 
