@@ -136,6 +136,7 @@ async def get_team(team_id: int):
                 bs.points_scored,
                 bs.is_starter,
                 tg.is_playoffs,
+                tg.playoff_tier,
                 opp.owner AS opponent,
                 bs.espn_player_id
             FROM box_scores bs

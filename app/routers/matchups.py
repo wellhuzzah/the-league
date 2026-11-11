@@ -16,6 +16,7 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
                 m.season,
                 m.week,
                 m.is_playoffs,
+                m.playoff_tier,
                 m.home_score,
                 m.away_score,
                 m.margin,
@@ -53,7 +54,7 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
         b_wins   = sum(1 for g in games if g["winner"] == "B")
         ties     = sum(1 for g in games if g["winner"] == "TIE")
         reg      = [g for g in games if not g["is_playoffs"]]
-        playoffs = [g for g in games if g["is_playoffs"]]
+        playoffs = [g for g in games if is_winners_bracket(g)]
 
         return {
             "team_a_id":    team_id_a,
@@ -68,11 +69,17 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
         }
 
 
+def is_winners_bracket(game):
+    """A playoff game that counts as one: winners bracket only. is_playoffs is every game from
+    week 14 on, so it also covers the consolation ladders (3rd/5th place and the toilet bowl)."""
+    return game["playoff_tier"] == "WINNERS_BRACKET"
+
+
 async def pair_games(a_id, b_id):
     """All games between two teams and both owners' names, fetched at once."""
     games, owners = await concurrently(
         lambda db: db.fetch("""
-            SELECT m.season, m.week, m.is_playoffs, m.home_score, m.away_score, m.margin,
+            SELECT m.season, m.week, m.is_playoffs, m.playoff_tier, m.home_score, m.away_score, m.margin,
                    m.winner_team_id, m.home_team_id, m.away_team_id
             FROM matchups m
             WHERE (m.home_team_id = $1 AND m.away_team_id = $2)
@@ -90,7 +97,7 @@ def h2h_highlights(a_id, b_id, games, owner):
     a_wins     = sum(1 for g in games if g["winner_team_id"] == a_id)
     b_wins     = sum(1 for g in games if g["winner_team_id"] == b_id)
     ties       = sum(1 for g in games if g["winner_team_id"] is None)
-    playoff_games = [g for g in games if g["is_playoffs"]]
+    playoff_games = [g for g in games if is_winners_bracket(g)]
 
     # Scores from each team's perspective
     def team_score(g, team_id):
@@ -132,6 +139,7 @@ def h2h_highlights(a_id, b_id, games, owner):
                 "winner_score": team_score(biggest, biggest["winner_team_id"]),
                 "loser_score":  team_score(biggest, b_id if biggest["winner_team_id"] == a_id else a_id),
                 "is_playoffs": biggest["is_playoffs"],
+                "playoff_tier": biggest["playoff_tier"],
             },
             "closest_game": {
                 "season":  closest["season"],
@@ -142,18 +150,21 @@ def h2h_highlights(a_id, b_id, games, owner):
                 "winner_score": team_score(closest, closest["winner_team_id"]) if closest["winner_team_id"] else float(closest["home_score"]),
                 "loser_score":  team_score(closest, b_id if closest["winner_team_id"] == a_id else a_id) if closest["winner_team_id"] else float(closest["away_score"]),
                 "is_playoffs": closest["is_playoffs"],
+                "playoff_tier": closest["playoff_tier"],
             },
             "team_a_best": {
                 "score":  team_score(a_best, a_id),
                 "season": a_best["season"],
                 "week":   a_best["week"],
                 "is_playoffs": a_best["is_playoffs"],
+                "playoff_tier": a_best["playoff_tier"],
             },
             "team_b_best": {
                 "score":  team_score(b_best, b_id),
                 "season": b_best["season"],
                 "week":   b_best["week"],
                 "is_playoffs": b_best["is_playoffs"],
+                "playoff_tier": b_best["playoff_tier"],
             },
         }
     }

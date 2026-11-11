@@ -17,7 +17,7 @@ LIST_SIZE = 10
 # One team's side of each game (team_games), with both owners. Within a tie, rows are ordered by
 # date (direction chosen per list to match the order the old queries happened to return), then owner.
 TEAM_WEEKS = """
-    SELECT tg.season, tg.week, tg.is_playoffs, t.owner, t.team_id, tg.score, tg.opp_score,
+    SELECT tg.season, tg.week, tg.is_playoffs, tg.playoff_tier, t.owner, t.team_id, tg.score, tg.opp_score,
            o.owner AS opponent
     FROM team_games tg
     JOIN teams t ON t.team_id = tg.team_id
@@ -81,6 +81,7 @@ MARGINS = """
         m.season,
         m.week,
         m.is_playoffs,
+        m.playoff_tier,
         m.home_score,
         m.away_score,
         m.margin,

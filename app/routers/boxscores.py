@@ -65,6 +65,7 @@ async def random_player_card(name, player):
                 bs.week,
                 t.owner,
                 m.is_playoffs,
+                m.playoff_tier,
                 opp.owner AS opponent
             FROM box_scores bs
             JOIN teams t   ON bs.team_id = t.team_id
@@ -122,6 +123,7 @@ async def random_player_card(name, player):
             "owner":         best_game_row["owner"],
             "opponent":      best_game_row["opponent"],
             "is_playoffs":   best_game_row["is_playoffs"],
+            "playoff_tier":  best_game_row["playoff_tier"],
         } if best_game_row else None,
         "top_owner": {
             "owner":       top_owner["owner"],
@@ -203,6 +205,7 @@ async def get_position_summary(position: str):
                 t.owner,
                 t.team_id,
                 m.is_playoffs,
+                m.playoff_tier,
                 opp.owner AS opponent,
                 bs.espn_player_id
             FROM box_scores bs
@@ -226,6 +229,7 @@ async def get_position_summary(position: str):
                 t.owner,
                 t.team_id,
                 m.is_playoffs,
+                m.playoff_tier,
                 bs.espn_player_id
             FROM box_scores bs
             JOIN teams t   ON bs.team_id = t.team_id

@@ -133,7 +133,8 @@ async def get_player(espn_player_id: int):
                 bs.is_starter,
                 t.owner,
                 t.team_id,
-                m.is_playoffs
+                m.is_playoffs,
+                m.playoff_tier
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
