@@ -8,6 +8,12 @@ router = APIRouter(
 )
 
 
+def win_pct(wins, losses, draws):
+    """NFL win percentage: a tie counts as half a win and half a loss. 0 with no games."""
+    games = wins + losses + draws
+    return round((wins + 0.5 * draws) / games, 3) if games else 0.0
+
+
 async def career_totals(db):
     """Career summary for every owner, most wins first. Serves /teams/ and the Records page's
     all-time standings (which drops owners with no finished season)."""
@@ -33,7 +39,7 @@ async def career_totals(db):
     """)
     out = []
     for row in rows:
-        wins, losses = row["total_wins"] or 0, row["total_losses"] or 0
+        wins, losses, draws = row["total_wins"] or 0, row["total_losses"] or 0, row["total_draws"] or 0
         points_for = float(row["total_points_for"] or 0)
         out.append({
             "team_id":              row["team_id"],
@@ -41,7 +47,7 @@ async def career_totals(db):
             "seasons_played":       row["seasons_played"],
             "total_wins":           wins,
             "total_losses":         losses,
-            "total_draws":          row["total_draws"] or 0,
+            "total_draws":          draws,
             "total_points_for":     points_for,
             "total_points_against": float(row["total_points_against"] or 0),
             "championships":        row["championships"] or 0,
@@ -49,8 +55,8 @@ async def career_totals(db):
             "most_points_seasons":  row["most_points_seasons"] or 0,
             "first_season":         row["first_season"],
             "last_season":          row["last_season"],
-            "win_pct":              round(wins / max(wins + losses, 1), 3),
-            "ppg":                  round(points_for / max(wins + losses, 1), 2),
+            "win_pct":              win_pct(wins, losses, draws),
+            "ppg":                  round(points_for / max(wins + losses + draws, 1), 2),
         })
     return out
 
@@ -189,11 +195,8 @@ async def get_team(team_id: int):
             "sackos":              career["sackos"] or 0,
             "most_points_seasons": career["most_points_seasons"] or 0,
             "avg_standing":        float(career["avg_standing"] or 0),
-            "win_pct":             round(
-                (career["total_wins"] or 0) /
-                max((career["total_wins"] or 0) + (career["total_losses"] or 0), 1),
-                3
-            ),
+            "win_pct":             win_pct(career["total_wins"] or 0, career["total_losses"] or 0,
+                                           career["total_draws"] or 0),
             "highest_score":       float(scoring["highest_score"] or 0),
             "lowest_score":        float(scoring["lowest_score"] or 0),
             "avg_score":           float(scoring["avg_score"] or 0),
@@ -204,6 +207,7 @@ async def get_team(team_id: int):
                 "wins":           row["wins"],
                 "losses":         row["losses"],
                 "draws":          row["draws"],
+                "win_pct":        win_pct(row["wins"], row["losses"], row["draws"]),
                 "points_for":     float(row["points_for"]),
                 "points_against": float(row["points_against"]),
                 "final_standing": row["final_standing"],

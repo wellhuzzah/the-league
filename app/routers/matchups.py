@@ -19,6 +19,8 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
                 m.playoff_tier,
                 m.home_score,
                 m.away_score,
+                m.home_adjustment,
+                m.away_adjustment,
                 m.margin,
                 m.winner_team_id,
                 m.home_team_id,
@@ -33,6 +35,8 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
                     WHEN m.home_team_id = $1 THEN m.away_score
                     ELSE m.home_score
                 END AS team_b_score,
+                CASE WHEN m.home_team_id = $1 THEN m.home_adjustment ELSE m.away_adjustment END AS team_a_adjustment,
+                CASE WHEN m.home_team_id = $1 THEN m.away_adjustment ELSE m.home_adjustment END AS team_b_adjustment,
                 CASE
                     WHEN m.winner_team_id = $1 THEN 'A'
                     WHEN m.winner_team_id = $2 THEN 'B'
@@ -129,9 +133,10 @@ def h2h_highlights(a_id, b_id, games, owner):
     a_best = max(games, key=lambda g: team_score(g, a_id))
     b_best = max(games, key=lambda g: team_score(g, b_id))
 
-    # Biggest margin game
+    # Biggest margin game; the closest leaves out equal scores (a tie, even with a tiebreak winner)
     biggest = max(games, key=lambda g: float(g["margin"]))
-    closest = min(games, key=lambda g: float(g["margin"]))
+    decided = [g for g in games if g["margin"] != 0]
+    closest = min(decided, key=lambda g: float(g["margin"])) if decided else None
 
     return {
         "team_a": { "team_id": a_id, "owner": a_owner },
@@ -158,14 +163,14 @@ def h2h_highlights(a_id, b_id, games, owner):
                 "is_playoffs": biggest["is_playoffs"],
                 "playoff_tier": biggest["playoff_tier"],
             },
-            "closest_game": {
+            "closest_game": closest and {
                 "season":  closest["season"],
                 "week":    closest["week"],
                 "margin":  float(closest["margin"]),
                 "winner":  a_owner if closest["winner_team_id"] == a_id else b_owner,
                 "loser":   b_owner if closest["winner_team_id"] == a_id else a_owner,
-                "winner_score": team_score(closest, closest["winner_team_id"]) if closest["winner_team_id"] else float(closest["home_score"]),
-                "loser_score":  team_score(closest, b_id if closest["winner_team_id"] == a_id else a_id) if closest["winner_team_id"] else float(closest["away_score"]),
+                "winner_score": team_score(closest, closest["winner_team_id"]),
+                "loser_score":  team_score(closest, b_id if closest["winner_team_id"] == a_id else a_id),
                 "is_playoffs": closest["is_playoffs"],
                 "playoff_tier": closest["playoff_tier"],
             },

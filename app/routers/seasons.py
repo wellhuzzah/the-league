@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.database import concurrently, get_pool
+from app.routers.teams import win_pct
 
 router = APIRouter(
     prefix="/seasons",
@@ -99,7 +100,8 @@ async def career_luck(db):
 
 
 def rank_in_progress(rows):
-    """Current place: win% (a draw counts half), then points for, then owner name."""
+    """Current place: wins with a draw counting half (the NFL win% order, as every team has played the
+    same number of games), then points for, then owner name."""
     ranked = sorted(rows, key=lambda r: (-(r["wins"] + 0.5 * r["draws"]), -float(r["points_for"]), r["owner"]))
     through = max((r["through_week"] or 0 for r in rows), default=0)
     return [
@@ -109,6 +111,7 @@ def rank_in_progress(rows):
             "wins":           r["wins"],
             "losses":         r["losses"],
             "draws":          r["draws"],
+            "win_pct":        win_pct(r["wins"], r["losses"], r["draws"]),
             "points_for":     float(r["points_for"]),
             "points_against": float(r["points_against"]),
             "final_standing": place,
@@ -197,6 +200,7 @@ async def season_standings(db, year):
     return [
         {
             **dict(row),
+            "win_pct":        win_pct(row["wins"], row["losses"], row["draws"]),
             "points_for":     float(row["points_for"]),
             "points_against": float(row["points_against"]),
             "in_progress":    False,
@@ -206,7 +210,8 @@ async def season_standings(db, year):
 
 
 async def weekly_scores(db, year):
-    """Every team's score for every week in a season."""
+    """Every team's score for every week in a season; adjustment is a league score adjustment
+    included in it (0 almost always)."""
     rows = await db.fetch("""
         SELECT
             tg.week,
@@ -214,13 +219,14 @@ async def weekly_scores(db, year):
             t.owner,
             t.team_id,
             tg.score,
+            tg.adjustment,
             CASE tg.result WHEN 'W' THEN true WHEN 'L' THEN false END       AS won
         FROM team_games tg
         JOIN teams t ON t.team_id = tg.team_id
         WHERE tg.season = $1
         ORDER BY tg.week, t.owner
     """, year)
-    return [{**dict(row), "score": float(row["score"])} for row in rows]
+    return [{**dict(row), "score": float(row["score"]), "adjustment": float(row["adjustment"])} for row in rows]
 
 
 async def top_scorer(db, year):

@@ -286,6 +286,7 @@ async def q_closest_game(db, rng: random.Random, seasons: list[int], owners: lis
 		JOIN teams ht ON m.home_team_id = ht.team_id
 		JOIN teams at ON m.away_team_id = at.team_id
 		WHERE m.season = $1 AND m.home_score > 0 AND m.away_score > 0
+		  AND m.home_score <> m.away_score   -- an equal score is a tie, not a close game
 		ORDER BY m.margin ASC
 		LIMIT 1
 		""",

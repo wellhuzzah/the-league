@@ -249,8 +249,12 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 			continue
 		h_id = season_map[h_espn]
 		a_id = season_map[a_espn]
-		h_score = home.get("totalPoints")
-		a_score = away.get("totalPoints")
+		# The final score includes any league score adjustment (adjustment; ESPN's totalPoints leaves
+		# it out). It is the score ESPN shows and the one that decided the game.
+		h_adj = dec(home.get("adjustment") or 0)
+		a_adj = dec(away.get("adjustment") or 0)
+		h_score = None if home.get("totalPoints") is None else dec(home["totalPoints"]) + h_adj
+		a_score = None if away.get("totalPoints") is None else dec(away["totalPoints"]) + a_adj
 		if winner == "HOME":
 			win_id = h_id
 		elif winner == "AWAY":
@@ -258,7 +262,7 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 		else:  # TIE (or anything non-UNDECIDED without a side)
 			win_id = None
 		# NONE in the regular season; WINNERS_BRACKET / WINNERS_CONSOLATION_LADDER /
-		# LOSERS_CONSOLATION_LADDER in the playoffs (luck counts only winners-bracket playoff games)
+		# LOSERS_CONSOLATION_LADDER (the toilet bowl) in the playoffs
 		tier = item.get("playoffTierType")
 		is_playoffs = week >= (REG_SEASON_WEEKS + 1)
 		if tier is None or (tier != "NONE") != is_playoffs:
@@ -267,7 +271,7 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 		decided.append({
 			"week": week, "is_playoffs": is_playoffs,
 			"h_id": h_id, "a_id": a_id,
-			"h_score": h_score, "a_score": a_score, "win_id": win_id,
+			"h_score": h_score, "a_score": a_score, "h_adj": h_adj, "a_adj": a_adj, "win_id": win_id,
 			"winner": winner, "tier": tier,
 		})
 		per_week[week] += 1
@@ -284,17 +288,20 @@ async def do_matchups(conn, sess, season, season_map, dry_run, summary, warnings
 			continue
 		row = await conn.fetchrow("""
 			INSERT INTO matchups (season, week, is_playoffs, home_team_id, away_team_id,
-			                      home_score, away_score, winner_team_id, playoff_tier)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			                      home_score, away_score, winner_team_id, playoff_tier,
+			                      home_adjustment, away_adjustment)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 			ON CONFLICT (season, week, home_team_id, away_team_id)
 			DO UPDATE SET home_score = EXCLUDED.home_score,
 			              away_score = EXCLUDED.away_score,
+			              home_adjustment = EXCLUDED.home_adjustment,
+			              away_adjustment = EXCLUDED.away_adjustment,
 			              winner_team_id = EXCLUDED.winner_team_id,
 			              is_playoffs = EXCLUDED.is_playoffs,
 			              playoff_tier = COALESCE(EXCLUDED.playoff_tier, matchups.playoff_tier)
 			RETURNING id, (xmax = 0) AS inserted
 		""", dec(season), m["week"], m["is_playoffs"], m["h_id"], m["a_id"],
-		     dec(m["h_score"]), dec(m["a_score"]), m["win_id"], m["tier"])
+		     m["h_score"], m["a_score"], m["win_id"], m["tier"], m["h_adj"], m["a_adj"])
 		id_map[(m["week"], m["h_id"], m["a_id"])] = row["id"]
 		if row["inserted"]:
 			ins += 1
@@ -322,18 +329,19 @@ async def load_team_map(conn, season):
 async def load_matchups(conn, season):
 	"""Matchups already in the DB for a season, in the shape do_box_scores expects."""
 	rows = await conn.fetch("""
-		SELECT id, week, home_team_id, away_team_id, home_score, away_score
+		SELECT id, week, home_team_id, away_team_id, home_score, away_score, home_adjustment, away_adjustment
 		FROM matchups WHERE season = $1
 	""", dec(season))
 	return [{"id": r["id"], "week": r["week"], "h_id": r["home_team_id"], "a_id": r["away_team_id"],
-	         "h_score": r["home_score"], "a_score": r["away_score"]} for r in rows]
+	         "h_score": r["home_score"], "a_score": r["away_score"],
+	         "h_adj": r["home_adjustment"], "a_adj": r["away_adjustment"]} for r in rows]
 
 
 async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
                         dry_run, summary, warnings):
 	"""Full roster (starters, bench, IR) for every matchup in `matchups`.
 
-	matchups: [{"id", "week", "h_id", "a_id", "h_score", "a_score"}]; id is None
+	matchups: [{"id", "week", "h_id", "a_id", "h_score", "a_score", "h_adj", "a_adj"}]; id is None
 	on a full-mode dry run for matchups not yet in the DB. Teams with no matchup
 	that week (playoff byes) are skipped; their rosters stay in the raw archive.
 	Existing rows keep their player_name/position; everything else is updated.
@@ -366,7 +374,9 @@ async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks
 				warnings.append(f"box wk{week}: no boxscore item for internal {m['h_id']} vs {m['a_id']}; skipped.")
 				continue
 
-			for side, internal_id, score in (("home", m["h_id"], m["h_score"]), ("away", m["a_id"], m["a_score"])):
+			# A matchup score includes any league adjustment; the players' points don't.
+			for side, internal_id, score in (("home", m["h_id"], m["h_score"] - m["h_adj"] if m["h_score"] is not None else None),
+			                                 ("away", m["a_id"], m["a_score"] - m["a_adj"] if m["a_score"] is not None else None)):
 				side_obj = item.get(side, {}) or {}
 				roster = (side_obj.get("rosterForCurrentScoringPeriod", {}) or {}).get("entries", [])
 				n_starters = 0
@@ -571,7 +581,8 @@ async def run(season, dry_run, weeks=None, box_scores_only=False):
 			db_ids = {(m["week"], m["h_id"], m["a_id"]): m["id"] for m in await load_matchups(conn, season)}
 			matchups = [{"id": id_map.get((m["week"], m["h_id"], m["a_id"])) or db_ids.get((m["week"], m["h_id"], m["a_id"])),
 			             "week": m["week"], "h_id": m["h_id"], "a_id": m["a_id"],
-			             "h_score": m["h_score"], "a_score": m["a_score"]} for m in decided]
+			             "h_score": m["h_score"], "a_score": m["a_score"],
+			             "h_adj": m["h_adj"], "a_adj": m["a_adj"]} for m in decided]
 			await do_box_scores(conn, sess, season, season_map, matchups, players, weeks,
 			                    dry_run, summary, warnings)
 			await do_draft(conn, sess, season, season_map, players, dry_run, summary, warnings)

@@ -63,12 +63,12 @@ class Luck(unittest.TestCase):
 		self.assertEqual(bad, [])
 
 	def test_hand_checked_week(self):
-		# 2009 week 1: 12 teams. Three at 88.00: joey r and mike o tied each other, greg d lost.
+		# 2009 week 1: 12 teams. Three at 88.00: mike o beat joey r on ESPN's tiebreak, greg d lost.
 		w = week(2009, 1)
 		self.assertEqual(len(w), 12)
 		expect = {    # owner: (actual, outscored, equal others)
 			"robert h": (1, 11, 0), "joey j": (1, 10, 0), "kevin m": (0, 6, 0),
-			"joey r": (F(1, 2), 3, 2), "mike o": (F(1, 2), 3, 2), "greg d": (0, 3, 2),
+			"joey r": (0, 3, 2), "mike o": (1, 3, 2), "greg d": (0, 3, 2),
 			"dan t": (0, 1, 0), "ben m": (0, 0, 0)}
 		for owner, (actual, outscored, equal) in expect.items():
 			with self.subTest(owner=owner):
@@ -76,18 +76,25 @@ class Luck(unittest.TestCase):
 				self.assertTrue(close(w[owner][0], actual))
 				self.assertTrue(close(w[owner][1], exp), (w[owner][1], float(exp)))
 				self.assertTrue(close(w[owner][2], actual - exp))
-		self.assertTrue(close(w["joey r"][2], F(3, 22)))     # 0.5 - 4/11
+		self.assertTrue(close(w["mike o"][2], F(7, 11)))     # 1 - 4/11
 		self.assertTrue(close(w["kevin m"][2], F(-6, 11)))
 		self.assertTrue(close(w["robert h"][2], 0))           # top score and a win: no luck
 
 	def test_ties_count_half(self):
-		w = week(2009, 1)
-		self.assertTrue(close(w["joey r"][0], 0.5) and close(w["mike o"][0], 0.5))
-		# a tied playoff game (2016 week 16, mike o v dan t 102.50 each, 5th-place ladder): half a win
-		# each, and the same expected result (an equal score counts half)
-		w = week(2016, 16)
-		self.assertTrue(close(w["mike o"][0], 0.5) and close(w["dan t"][0], 0.5))
-		self.assertTrue(close(w["mike o"][1], w["dan t"][1]))
+		# a true tie (2019 week 3, greg d v nick o 111.50 each; ESPN says TIE): half a win each, and the
+		# same expected result (an equal score counts half)
+		w = week(2019, 3)
+		self.assertTrue(close(w["greg d"][0], 0.5) and close(w["nick o"][0], 0.5))
+		self.assertTrue(close(w["greg d"][1], w["nick o"][1]))
+
+	def test_tiebreak_winner_counts_as_a_win(self):
+		# Equal scores that ESPN's tiebreak decided are wins and losses, with the same expected result:
+		# 2009 week 1 (mike o over joey r, 88.00 each) and the 5th-place game in 2016 week 16 (mike o
+		# over dan t, 102.50 each)
+		for season, wk, winner, loser in ((2009, 1, "mike o", "joey r"), (2016, 16, "mike o", "dan t")):
+			w = week(season, wk)
+			self.assertEqual((w[winner][0], w[loser][0]), (1, 0))
+			self.assertTrue(close(w[winner][1], w[loser][1]))
 
 	def test_bye_week(self):
 		# 2021 week 14: 9-team playoff, one winners-bracket game (ryan j v kenny d) and 7 byes. Teams

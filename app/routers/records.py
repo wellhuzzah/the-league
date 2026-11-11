@@ -16,9 +16,10 @@ LIST_SIZE = 10
 
 # One team's side of each game (team_games), with both owners. Within a tie, rows are ordered by
 # date (direction chosen per list to match the order the old queries happened to return), then owner.
+# adjustment/opp_adjustment: a league score adjustment included in the score (0 almost always).
 TEAM_WEEKS = """
     SELECT tg.season, tg.week, tg.is_playoffs, tg.playoff_tier, t.owner, t.team_id, tg.score, tg.opp_score,
-           o.owner AS opponent
+           tg.adjustment, tg.opp_adjustment, o.owner AS opponent
     FROM team_games tg
     JOIN teams t ON t.team_id = tg.team_id
     JOIN teams o ON o.team_id = tg.opp_id
@@ -86,6 +87,8 @@ MARGINS = """
         m.playoff_tier,
         m.home_score,
         m.away_score,
+        m.home_adjustment,
+        m.away_adjustment,
         m.margin,
         t_home.owner AS home_owner,
         t_away.owner AS away_owner,
@@ -98,6 +101,9 @@ MARGINS = """
       {extra}
 """
 
+# Closest games: an equal score is a tie even when ESPN's tiebreak named a winner, so it's left out.
+CLOSEST_GAMES = MARGINS.format(extra="AND m.home_score <> m.away_score")
+
 
 def ranked(query, value, direction, tie_break):
     """top_n of LIST_SIZE by value; within a tie, tie_break (output column names)."""
@@ -105,7 +111,8 @@ def ranked(query, value, direction, tie_break):
 
 
 def scores(rows):
-    return [{**dict(r), "score": float(r["score"]), "opp_score": float(r["opp_score"])} for r in rows]
+    return [{**dict(r), "score": float(r["score"]), "opp_score": float(r["opp_score"]),
+             "adjustment": float(r["adjustment"]), "opp_adjustment": float(r["opp_adjustment"])} for r in rows]
 
 
 def season_points(rows):
@@ -115,7 +122,8 @@ def season_points(rows):
 
 def margins(rows):
     return [{**dict(r), "margin": float(r["margin"]), "home_score": float(r["home_score"]),
-             "away_score": float(r["away_score"])} for r in rows]
+             "away_score": float(r["away_score"]), "home_adjustment": float(r["home_adjustment"]),
+             "away_adjustment": float(r["away_adjustment"])} for r in rows]
 
 
 @router.get("/summary")
@@ -136,7 +144,7 @@ async def get_records_summary():
                                    "season DESC, week DESC, owner"), LIST_SIZE),
         lambda db: db.fetch(ranked(MARGINS.format(extra="AND m.home_score > 0 AND m.away_score > 0"),
                                    "margin", "DESC", "season, week"), LIST_SIZE),
-        lambda db: db.fetch(ranked(MARGINS.format(extra=""), "margin", "ASC", "season, week"), LIST_SIZE),
+        lambda db: db.fetch(ranked(CLOSEST_GAMES, "margin", "ASC", "season, week"), LIST_SIZE),
         draft_tendencies,
     )
     streak_rows = without(streaks, "won", "place")

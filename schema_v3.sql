@@ -198,3 +198,41 @@ SELECT m.id, m.season, m.week, m.is_playoffs,
 FROM matchups m;
 
 COMMIT;
+
+-- ===========================================================================
+-- 8. matchups.home_adjustment / away_adjustment   (2026-11-11, records audit)
+-- ===========================================================================
+-- A score adjustment the league made to a team's total that week (ESPN's schedule
+-- home/away.adjustment, e.g. a stat correction). ESPN's totalPoints leaves it out; the score ESPN
+-- shows, and the one that decided the game, includes it. home_score/away_score store that final
+-- score, so they agree with the winner and with records PF/PA; the adjustment is kept so pages can
+-- mark an adjusted score. Three games have one: 2010 W1 (+1), 2011 W9 (+2, changes the winner),
+-- 2012 W2 (+6). espn_import.py writes both. team_games gains adjustment and opp_adjustment.
+-- Applied by scripts\records_audit_fix.sql in the same transaction as the data fix.
+-- Undo: scripts\rollback_records_audit.sql.
+
+BEGIN;
+
+ALTER TABLE matchups ADD COLUMN home_adjustment numeric(6,2) NOT NULL DEFAULT 0,
+                     ADD COLUMN away_adjustment numeric(6,2) NOT NULL DEFAULT 0;
+
+CREATE OR REPLACE VIEW team_games AS
+SELECT m.id AS matchup_id, m.season, m.week, m.is_playoffs,
+       m.home_team_id AS team_id, m.away_team_id AS opp_id,
+       m.home_score AS score, m.away_score AS opp_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.home_team_id THEN 'W' ELSE 'L' END AS result,
+       m.playoff_tier,
+       m.home_adjustment AS adjustment, m.away_adjustment AS opp_adjustment
+FROM matchups m
+UNION ALL
+SELECT m.id, m.season, m.week, m.is_playoffs,
+       m.away_team_id, m.home_team_id,
+       m.away_score, m.home_score, m.margin,
+       CASE WHEN m.winner_team_id IS NULL THEN 'T'
+            WHEN m.winner_team_id = m.away_team_id THEN 'W' ELSE 'L' END,
+       m.playoff_tier,
+       m.away_adjustment, m.home_adjustment
+FROM matchups m;
+
+COMMIT;
