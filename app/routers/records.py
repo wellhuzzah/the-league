@@ -39,9 +39,9 @@ SEASON_TOTALS = """
 """
 
 # Winning and losing streaks in one pass. A tie game ends a streak (it takes a row number but
-# belongs to neither group). start_week/end_week are MIN/MAX over the streak's weeks, as before,
-# so a streak spanning seasons reports the smallest and largest week number, not its first and
-# last game's week.
+# belongs to neither group). The start and end are the streak's first and last games in
+# (season, week) order, so a streak spanning seasons ends in the later season's week, not at the
+# largest week number.
 STREAKS = """
     WITH ordered_games AS (
         SELECT tg.team_id, t.owner, tg.season, tg.week,
@@ -51,18 +51,18 @@ STREAKS = """
         JOIN teams t ON t.team_id = tg.team_id
     ),
     grouped AS (
-        SELECT team_id, owner, season, week, won,
+        SELECT team_id, owner, season, week, won, rn,
                rn - ROW_NUMBER() OVER (PARTITION BY team_id, won ORDER BY rn)  AS grp
         FROM ordered_games
         WHERE won IS NOT NULL
     ),
     streaks AS (
         SELECT team_id, owner, won,
-               COUNT(*)      AS streak_length,
-               MIN(season)   AS start_season,
-               MIN(week)     AS start_week,
-               MAX(season)   AS end_season,
-               MAX(week)     AS end_week
+               COUNT(*)                              AS streak_length,
+               MIN(season)                           AS start_season,
+               (ARRAY_AGG(week ORDER BY rn))[1]      AS start_week,
+               MAX(season)                           AS end_season,
+               (ARRAY_AGG(week ORDER BY rn DESC))[1] AS end_week
         FROM grouped
         GROUP BY team_id, owner, won, grp
     ),
