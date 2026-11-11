@@ -17,12 +17,15 @@ LIST_SIZE = 10
 # One team's side of each game (team_games), with both owners. Within a tie, rows are ordered by
 # date (direction chosen per list to match the order the old queries happened to return), then owner.
 # adjustment/opp_adjustment: a league score adjustment included in the score (0 almost always).
+# Toilet bowl games (the losers' ladder) are left out of every single-game list here: lineups there
+# often go unset, which skews low scores, blowouts and the rest. Callers add conditions with AND.
 TEAM_WEEKS = """
     SELECT tg.season, tg.week, tg.is_playoffs, tg.playoff_tier, t.owner, t.team_id, tg.score, tg.opp_score,
            tg.adjustment, tg.opp_adjustment, o.owner AS opponent
     FROM team_games tg
     JOIN teams t ON t.team_id = tg.team_id
     JOIN teams o ON o.team_id = tg.opp_id
+    WHERE tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
 """
 
 SEASON_TOTALS = """
@@ -98,6 +101,7 @@ MARGINS = """
     JOIN teams t_away   ON m.away_team_id   = t_away.team_id
     LEFT JOIN teams t_winner ON m.winner_team_id = t_winner.team_id
     WHERE m.winner_team_id IS NOT NULL
+      AND m.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
       {extra}
 """
 
@@ -138,9 +142,9 @@ async def get_records_summary():
         lambda db: db.fetch(ranked(TEAM_WEEKS, "score", "ASC", "season, week, owner"), LIST_SIZE),
         lambda db: db.fetch(STREAKS, LIST_SIZE),
         # Highest scores that still lost: the unluckiest weeks
-        lambda db: db.fetch(ranked(TEAM_WEEKS + "WHERE tg.result = 'L'", "score", "DESC", "season, week, owner"), LIST_SIZE),
+        lambda db: db.fetch(ranked(TEAM_WEEKS + "AND tg.result = 'L'", "score", "DESC", "season, week, owner"), LIST_SIZE),
         # Lowest scores that still won (against a team that scored): the luckiest weeks
-        lambda db: db.fetch(ranked(TEAM_WEEKS + "WHERE tg.result = 'W' AND tg.opp_score > 0", "score", "ASC",
+        lambda db: db.fetch(ranked(TEAM_WEEKS + "AND tg.result = 'W' AND tg.opp_score > 0", "score", "ASC",
                                    "season DESC, week DESC, owner"), LIST_SIZE),
         lambda db: db.fetch(ranked(MARGINS.format(extra="AND m.home_score > 0 AND m.away_score > 0"),
                                    "margin", "DESC", "season, week"), LIST_SIZE),

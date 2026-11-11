@@ -72,6 +72,15 @@ class Data(unittest.TestCase):
 		                FROM matchups""")
 		self.assertEqual((rows[0]["missing"], rows[0]["mismatched"]), (0, 0))
 
+	def test_records_game_lists_leave_out_the_toilet_bowl(self):
+		# The Records page's single-game lists (best/worst week, highest losing, lowest winning,
+		# blowouts, closest) all read TEAM_WEEKS or MARGINS, which drop toilet bowl games.
+		from app.routers.records import MARGINS, TEAM_WEEKS
+		for sql in (TEAM_WEEKS, MARGINS.format(extra="")):
+			tiers = {r["playoff_tier"] for r in fetch(sql)}
+			self.assertIn("WINNERS_BRACKET", tiers)
+			self.assertNotIn("LOSERS_CONSOLATION_LADDER", tiers)
+
 	def test_one_champion_game_per_finished_season(self):
 		# The winners bracket ends in one final per season, played by that season's champion.
 		rows = fetch("""SELECT r.season FROM records r WHERE r.championship AND NOT EXISTS (

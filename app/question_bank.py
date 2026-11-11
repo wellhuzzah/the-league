@@ -221,6 +221,7 @@ async def q_highest_single_week(db, rng: random.Random, seasons: list[int], owne
 		FROM team_games tg
 		JOIN teams t ON t.team_id = tg.team_id
 		WHERE tg.season = $1 AND tg.score > 0 AND tg.opp_score > 0
+		  AND tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'   -- toilet bowl aside
 		ORDER BY tg.score DESC, tg.week, t.owner
 		LIMIT 1
 		""",
@@ -254,6 +255,7 @@ async def q_highest_score_exact(db, rng: random.Random, seasons: list[int], owne
 		JOIN teams ht ON m.home_team_id = ht.team_id
 		JOIN teams at ON m.away_team_id = at.team_id
 		WHERE m.season = $1 AND home_score > 0 AND away_score > 0
+		  AND m.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'   -- toilet bowl aside
 		ORDER BY top_score DESC
 		LIMIT 1
 		""",
@@ -287,6 +289,7 @@ async def q_closest_game(db, rng: random.Random, seasons: list[int], owners: lis
 		JOIN teams at ON m.away_team_id = at.team_id
 		WHERE m.season = $1 AND m.home_score > 0 AND m.away_score > 0
 		  AND m.home_score <> m.away_score   -- an equal score is a tie, not a close game
+		  AND m.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'   -- toilet bowl aside
 		ORDER BY m.margin ASC
 		LIMIT 1
 		""",
@@ -522,7 +525,7 @@ async def q_h2h_series_leader(db, rng: random.Random, seasons: list[int], owners
 	"""Who leads the all-time H2H series between owner A and owner B?"""
 	# pick two owners who have played each other a meaningful number of times, with the series
 	# record, in one query. Grouped per matchup (not team_games) so the seeded daily round picks
-	# the same pair as before.
+	# the same pair as before. Toilet bowl games aside, like the H2H page's record.
 	row = await db.fetchrow(
 		"""
 		SELECT
@@ -536,6 +539,7 @@ async def q_h2h_series_leader(db, rng: random.Random, seasons: list[int], owners
 		JOIN teams at ON m.away_team_id = at.team_id
 		LEFT JOIN teams wt ON m.winner_team_id = wt.team_id
 		WHERE ht.owner != at.owner
+		  AND m.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
 		GROUP BY LEAST(ht.owner, at.owner), GREATEST(ht.owner, at.owner)
 		HAVING COUNT(*) >= 8
 		ORDER BY RANDOM()
