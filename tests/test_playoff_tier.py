@@ -47,14 +47,14 @@ def fetch(sql, *args):
 class Highlights(unittest.TestCase):
 	def test_playoff_count_leaves_out_the_toilet_bowl(self):
 		games = [game(3, "NONE"), game(14, "WINNERS_BRACKET"), game(15, "WINNERS_CONSOLATION_LADDER"),
-		         game(16, "LOSERS_CONSOLATION_LADDER", hs=150.0)]
+		         game(16, "LOSERS_CONSOLATION_LADDER", hs=150.0, as_=20.0)]
 		h = h2h_highlights(1, 2, games, {1: "a", 2: "b"})
 		self.assertEqual(h["summary"]["playoff_games"], 2)
-		self.assertEqual(h["summary"]["total_games"], 4)
-		# a's best game was the toilet bowl: week 14+, not a playoff game, and the tier says so
-		best = h["highlights"]["team_a_best"]
-		self.assertEqual((best["week"], best["is_playoffs"], best["playoff_tier"]),
-		                 (16, True, "LOSERS_CONSOLATION_LADDER"))
+		# the toilet bowl game counts for nothing: not in the record, averages or highlights
+		self.assertEqual((h["summary"]["total_games"], h["summary"]["toilet_games"]), (3, 1))
+		self.assertEqual((h["summary"]["team_a_wins"], h["summary"]["team_a_avg"]), (3, 100.0))
+		self.assertEqual(h["highlights"]["team_a_best"]["score"], 100.0)
+		self.assertEqual(h["highlights"]["biggest_margin"]["margin"], 10.0)
 
 	def test_is_playoff_game(self):
 		for tier in ("WINNERS_BRACKET", "WINNERS_CONSOLATION_LADDER"):

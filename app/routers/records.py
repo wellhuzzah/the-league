@@ -39,7 +39,8 @@ SEASON_TOTALS = """
 """
 
 # Winning and losing streaks in one pass. A tie game ends a streak (it takes a row number but
-# belongs to neither group). The start and end are the streak's first and last games in
+# belongs to neither group). Toilet bowl games (the losers' ladder) are left out, like byes: teams
+# often don't set lineups for them, so they neither extend nor end a streak. The start and end are the streak's first and last games in
 # (season, week) order, so a streak spanning seasons ends in the later season's week, not at the
 # largest week number.
 STREAKS = """
@@ -49,6 +50,7 @@ STREAKS = """
                ROW_NUMBER() OVER (PARTITION BY tg.team_id ORDER BY tg.season, tg.week) AS rn
         FROM team_games tg
         JOIN teams t ON t.team_id = tg.team_id
+        WHERE tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
     ),
     grouped AS (
         SELECT team_id, owner, season, week, won, rn,

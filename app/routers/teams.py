@@ -102,7 +102,7 @@ async def get_team(team_id: int):
             FROM records
             WHERE team_id = $1
         """, team_id),
-        # All-time record against every opponent
+        # All-time record against every opponent, toilet bowl games aside (lineups often go unset)
         lambda db: db.fetch("""
             SELECT
                 opp.team_id                                         AS opp_team_id,
@@ -115,7 +115,7 @@ async def get_team(team_id: int):
                 ROUND(AVG(tg.opp_score), 2)                         AS avg_score_against
             FROM team_games tg
             JOIN teams opp ON opp.team_id = tg.opp_id
-            WHERE tg.team_id = $1
+            WHERE tg.team_id = $1 AND tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
             GROUP BY opp.team_id, opp.owner
             ORDER BY wins DESC, opp.owner
         """, team_id),

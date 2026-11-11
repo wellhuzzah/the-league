@@ -1,7 +1,7 @@
 r"""
 Streak tests: STREAKS from app/routers/records.py, run on made-up games against the database as
 rockwood_api (read-only), plus a live check. A streak's start and end are its first and last games
-in (season, week) order; a tie ends a streak.
+in (season, week) order; a tie ends a streak; toilet bowl games are left out.
 
 	venv\Scripts\python.exe -B -m unittest tests.test_streaks -v
 
@@ -40,10 +40,11 @@ def fetch(sql, *args):
 
 
 def streaks(games):
-	"""Every streak (won, owner, length, start, end) for made-up (team_id, season, week, result) rows."""
+	"""Every streak (won, owner, length, start, end) for made-up (team_id, season, week, result[, tier])
+	rows; tier defaults to NONE."""
 	assert SOURCE in STREAKS
-	values = ", ".join(f"({t}, {s}, {w}, '{r}')" for t, s, w, r in games)
-	sql = STREAKS.replace(SOURCE, f"""FROM (VALUES {values}) AS tg(team_id, season, week, result)
+	values = ", ".join(f"({g[0]}, {g[1]}, {g[2]}, '{g[3]}', '{g[4] if len(g) > 4 else 'NONE'}')" for g in games)
+	sql = STREAKS.replace(SOURCE, f"""FROM (VALUES {values}) AS tg(team_id, season, week, result, playoff_tier)
 		JOIN (VALUES (1, 'a'), (2, 'b')) AS t(team_id, owner) ON t.team_id = tg.team_id""")
 	return {(r["won"], r["owner"], r["streak_length"],
 	         (r["start_season"], r["start_week"]), (r["end_season"], r["end_week"]))
@@ -68,6 +69,14 @@ class Streaks(unittest.TestCase):
 	def test_tie_ends_a_streak(self):
 		got = streaks([(1, 2020, 1, 'W'), (1, 2020, 2, 'W'), (1, 2020, 3, 'T'), (1, 2020, 4, 'W')])
 		self.assertEqual(got, {(1, "a", 2, (2020, 1), (2020, 2)), (1, "a", 1, (2020, 4), (2020, 4))})
+
+	def test_toilet_bowl_games_left_out(self):
+		# Team a loses weeks 12-13, loses a toilet game in week 15 and wins one in week 16, then loses
+		# 2021 week 1: one 3-game losing streak, the toilet games neither extending nor ending it.
+		got = streaks([(1, 2020, 12, 'L'), (1, 2020, 13, 'L'),
+		               (1, 2020, 15, 'L', 'LOSERS_CONSOLATION_LADDER'), (1, 2020, 16, 'W', 'LOSERS_CONSOLATION_LADDER'),
+		               (1, 2021, 1, 'L')])
+		self.assertEqual(got, {(0, "a", 3, (2020, 12), (2021, 1))})
 
 	def test_live_streaks_run_forward(self):
 		# Every live streak ends at or after its start, and one in a single season spans at least

@@ -2,7 +2,8 @@ r"""
 Luck (Bullshit Index) tests: LUCK_WEEKS from app/routers/seasons.py, run against the database as
 rockwood_api. Read-only. The definition: per team-week, actual result (W 1, T 0.5, L 0) minus the
 share of that week's pool the team outscored (an equal score counts half); the pool is every
-regular-season game and, in the playoffs, winners-bracket games only; a game where either side
+regular-season game and, in the playoffs, playoff games only (winners bracket and the 3rd/5th/7th-place
+ladder; the toilet bowl is out); a game where either side
 scored 0 drops both teams.
 
 	venv\Scripts\python.exe -B -m unittest tests.test_luck -v
@@ -82,11 +83,11 @@ class Luck(unittest.TestCase):
 	def test_ties_count_half(self):
 		w = week(2009, 1)
 		self.assertTrue(close(w["joey r"][0], 0.5) and close(w["mike o"][0], 0.5))
-		# a tied playoff final (2024 week 17, 110.50 each): half a win each, expected half: no luck
-		final = week(2024, 17)
-		self.assertEqual(sorted(final), ["brian h", "joey r"])
-		for owner in final:
-			self.assertTrue(close(final[owner][0], 0.5) and close(final[owner][1], 0.5) and close(final[owner][2], 0))
+		# a tied playoff game (2016 week 16, mike o v dan t 102.50 each, 5th-place ladder): half a win
+		# each, and the same expected result (an equal score counts half)
+		w = week(2016, 16)
+		self.assertTrue(close(w["mike o"][0], 0.5) and close(w["dan t"][0], 0.5))
+		self.assertTrue(close(w["mike o"][1], w["dan t"][1]))
 
 	def test_bye_week(self):
 		# 2021 week 14: 9-team playoff, one winners-bracket game (ryan j v kenny d) and 7 byes. Teams
@@ -98,14 +99,15 @@ class Luck(unittest.TestCase):
 		for actual, expected, luck in w.values():
 			self.assertTrue(close(expected, actual) and close(luck, 0))    # a pool of 2: winner outscored the loser
 
-	def test_consolation_games_excluded(self):
-		# 2021 week 16: winners bracket owens v jake d and ben m v josh d; the 3rd-place-ladder games
-		# (brian h v ryan l, joey j v ryan j) and the losers ladder count for nothing.
+	def test_toilet_bowl_excluded(self):
+		# 2021 week 16: winners bracket owens v jake d and ben m v josh d, plus the 3rd-place-ladder
+		# games (brian h v ryan l, joey j v ryan j); the losers ladder counts for nothing.
 		w = week(2021, 16)
-		self.assertEqual(sorted(w), ["ben m", "jake d", "josh d", "owens"])
-		# 2016 week 16: mike o v dan t tied 102.50 in a consolation game; only the final counts
-		self.assertEqual(sorted(week(2016, 16)), ["greg d", "jake d"])
-		# 2017 week 16: ben m's 0.00 came in a losers-ladder game
+		self.assertEqual(sorted(w), ["ben m", "brian h", "jake d", "joey j", "josh d", "owens", "ryan j", "ryan l"])
+		# 2016 week 16: the final and three 3rd/5th/7th-place games; three toilet games left out
+		self.assertEqual(sorted(week(2016, 16)),
+		                 ["ben m", "dan t", "greg d", "jake d", "joey r", "kevin m", "mike o", "ryan j"])
+		# 2017 week 16: ben m's 0.00 came in a toilet bowl game
 		self.assertNotIn("ben m", week(2017, 16))
 
 	def test_zero_score_game_drops_both_teams(self):

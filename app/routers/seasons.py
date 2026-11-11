@@ -37,15 +37,15 @@ IN_PROGRESS_STANDINGS = """
 # Luck (the Bullshit Index), per team-week: the actual result (W 1, T 0.5, L 0, from the stored
 # matchup result, so it follows any later decision on a recorded winner) minus the expected result,
 # the share of that week's pool the team outscored, an equal score counting half. The pool is every
-# regular-season game and, in the playoffs, winners-bracket games only (matchups.playoff_tier):
-# consolation games and byes count for nothing, and a game where either side scored 0 drops both
+# regular-season game and, in the playoffs, the playoff games (matchups.playoff_tier: the winners
+# bracket and its 3rd/5th/7th-place ladder): toilet bowl games and byes count for nothing, and a game where either side scored 0 drops both
 # teams. So every week sums to 0 across the league. Season and career luck are sums over weeks.
 LUCK_WEEKS = """
     WITH games AS (
         SELECT tg.season, tg.week, tg.team_id, tg.score,
                CASE tg.result WHEN 'W' THEN 1 WHEN 'T' THEN 0.5 ELSE 0 END AS actual
         FROM team_games tg
-        WHERE (NOT tg.is_playoffs OR tg.playoff_tier = 'WINNERS_BRACKET')
+        WHERE (NOT tg.is_playoffs OR tg.playoff_tier IN ('WINNERS_BRACKET', 'WINNERS_CONSOLATION_LADDER'))
           AND tg.score > 0 AND tg.opp_score > 0 {where}
     ),
     weekly AS (

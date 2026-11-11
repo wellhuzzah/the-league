@@ -49,17 +49,19 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
 
         games = [dict(row) for row in rows]
 
-        # Compute summary
-        a_wins   = sum(1 for g in games if g["winner"] == "A")
-        b_wins   = sum(1 for g in games if g["winner"] == "B")
-        ties     = sum(1 for g in games if g["winner"] == "TIE")
-        reg      = [g for g in games if not g["is_playoffs"]]
-        playoffs = [g for g in games if is_playoff_game(g)]
+        # Compute summary (toilet bowl games aside)
+        record   = counted(games)
+        a_wins   = sum(1 for g in record if g["winner"] == "A")
+        b_wins   = sum(1 for g in record if g["winner"] == "B")
+        ties     = sum(1 for g in record if g["winner"] == "TIE")
+        reg      = [g for g in record if not g["is_playoffs"]]
+        playoffs = [g for g in record if is_playoff_game(g)]
 
         return {
             "team_a_id":    team_id_a,
             "team_b_id":    team_id_b,
-            "total_games":  len(games),
+            "total_games":  len(record),
+            "toilet_games": len(games) - len(record),
             "team_a_wins":  a_wins,
             "team_b_wins":  b_wins,
             "ties":         ties,
@@ -72,10 +74,17 @@ async def get_head_to_head(team_id_a: int, team_id_b: int):
 # Playoff games: the winners bracket and its consolation ladder (3rd/5th/7th place). is_playoffs is
 # every game from week 14 on, so it also covers the losers' ladder, the toilet bowl.
 PLAYOFF_TIERS = ("WINNERS_BRACKET", "WINNERS_CONSOLATION_LADDER")
+TOILET_TIER = "LOSERS_CONSOLATION_LADDER"
 
 
 def is_playoff_game(game):
     return game["playoff_tier"] in PLAYOFF_TIERS
+
+
+def counted(games):
+    """The games a head-to-head record counts: all but the toilet bowl, where lineups often go
+    unset. Toilet games stay in the game log (tagged) but not in the record, averages or highlights."""
+    return [g for g in games if g["playoff_tier"] != TOILET_TIER]
 
 
 async def pair_games(a_id, b_id):
@@ -95,7 +104,11 @@ async def pair_games(a_id, b_id):
 
 
 def h2h_highlights(a_id, b_id, games, owner):
-    """The random-h2h card for a pair: record, averages and four highlight games."""
+    """The random-h2h card for a pair: record, averages and four highlight games, toilet bowl
+    games aside."""
+    toilet_games = len(games)
+    games = counted(games)
+    toilet_games -= len(games)
     a_owner, b_owner = owner[a_id], owner[b_id]
     a_wins     = sum(1 for g in games if g["winner_team_id"] == a_id)
     b_wins     = sum(1 for g in games if g["winner_team_id"] == b_id)
@@ -129,6 +142,7 @@ def h2h_highlights(a_id, b_id, games, owner):
             "team_b_wins":    b_wins,
             "ties":           ties,
             "playoff_games":  len(playoff_games),
+            "toilet_games":   toilet_games,
             "team_a_avg":     round(a_avg, 2),
             "team_b_avg":     round(b_avg, 2),
         },
@@ -175,7 +189,8 @@ def h2h_highlights(a_id, b_id, games, owner):
 
 @router.get("/random-h2h")
 async def get_random_h2h():
-    """A random head-to-head pairing with at least 5 games played, with a highlight summary."""
+    """A random head-to-head pairing with at least 5 games played (toilet bowl aside), with a
+    highlight summary."""
     async with (await get_pool()).acquire() as db:
         pair = await db.fetchrow("""
             SELECT
@@ -183,6 +198,7 @@ async def get_random_h2h():
                 GREATEST(home_team_id, away_team_id) AS team_b_id,
                 COUNT(*)                             AS total_games
             FROM matchups
+            WHERE playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
             GROUP BY
                 LEAST(home_team_id, away_team_id),
                 GREATEST(home_team_id, away_team_id)
