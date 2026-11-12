@@ -32,7 +32,8 @@ async def search_players(q: str = Query(...)):
     """Players whose name contains q (2+ characters; % and _ match literally), one row per ESPN
     player id, at most 20. Order: by each player's best starting game (points, then date), then
     players who were only drafted, in draft order. appearances = starts whose name matched,
-    drafted = picks whose name matched; position comes from the first of those. The name shown is
+    drafted = picks whose name matched; position comes from the first of those; seasons = every
+    season of those starts and picks, ascending (tells same-name players apart). The name shown is
     the most recent of the player's names that matched (so a search for "Washington" shows
     "Washington D/ST", not the team's later "Commanders D/ST")."""
     term = search_term(q)
@@ -82,10 +83,18 @@ async def search_players(q: str = Query(...)):
                 FULL JOIN d ON d.espn_player_id = b.espn_player_id
                 ORDER BY b.ord NULLS LAST, d.ord
                 LIMIT $2
+            ),
+            yrs AS (
+                SELECT espn_player_id, array_agg(DISTINCT season ORDER BY season) AS seasons
+                FROM (SELECT espn_player_id, season FROM box
+                      UNION ALL
+                      SELECT espn_player_id, season FROM draft) s
+                GROUP BY espn_player_id
             )
-            SELECT f.espn_player_id, n.player_name, f.position, f.appearances, f.drafted
+            SELECT f.espn_player_id, n.player_name, f.position, f.appearances, f.drafted, y.seasons
             FROM found f
             JOIN latest_name n ON n.espn_player_id = f.espn_player_id
+            JOIN yrs y ON y.espn_player_id = f.espn_player_id
             ORDER BY f.box_ord NULLS LAST, f.draft_ord
         """, f"%{like_escape(term)}%", SEARCH_LIMIT)
     return {"query": q, "players": [dict(r) for r in rows]}
