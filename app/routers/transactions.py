@@ -260,6 +260,7 @@ async def biggest_bids(db, limit, season=None):
 			t.bid_amount,
 			tm.owner,
 			tm.team_id,
+			i.espn_player_id,
 			i.player_name,
 			i.position,
 			t.season,
@@ -292,6 +293,7 @@ async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 				t.status,
 				tm.owner,
 				tm.team_id,
+				i.espn_player_id,
 				i.player_name,
 				i.position,
 				t.season,
@@ -340,6 +342,7 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 				wt.owner,
 				w.team_id,
 				rt.owner                                  AS runner_up_owner,
+				w.espn_player_id,
 				w.player_name,
 				w.position,
 				w.season,
@@ -401,7 +404,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				WHERE t.status = 'EXECUTED' AND t.type IN ('WAIVER', 'FREEAGENT')
 			),
 			stints AS (
-				SELECT p.id, p.season, p.week, p.team_id, p.player_name, p.position, p.type,
+				SELECT p.id, p.season, p.week, p.team_id, p.espn_player_id, p.player_name, p.position, p.type,
 				       p.bid_amount, p.event_at,
 				       COUNT(b.id)                       AS games,
 				       COALESCE(SUM(b.points_scored), 0) AS points
@@ -415,7 +418,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				      AND b.has_stats
 				WHERE (CASE WHEN $1 THEN p.bid_amount > 0 ELSE p.bid_amount = 0 END)
 				  AND ($3::numeric IS NULL OR p.season = $3)
-				GROUP BY p.id, p.season, p.week, p.team_id, p.player_name, p.position, p.type,
+				GROUP BY p.id, p.season, p.week, p.team_id, p.espn_player_id, p.player_name, p.position, p.type,
 				         p.bid_amount, p.event_at
 			)
 			SELECT
@@ -423,6 +426,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				s.week,
 				tm.owner,
 				tm.team_id,
+				s.espn_player_id,
 				s.player_name,
 				s.position,
 				s.type,

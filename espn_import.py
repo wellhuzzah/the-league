@@ -386,6 +386,9 @@ async def do_box_scores(conn, sess, season, season_map, matchups, players, weeks
 					if slot not in SLOT_LABEL:
 						sys.exit(f"ERROR: unknown lineupSlotId {slot!r} (season {season} wk{week} team {internal_id}). Nothing written.")
 					pid = e.get("playerId")
+					if pid is None:   # espn_player_id is NOT NULL (schema_v3 section 10)
+						warnings.append(f"box wk{week} team {internal_id}: roster entry with no playerId; skipped row.")
+						continue
 					ppe = e.get("playerPoolEntry", {}) or {}
 					pobj = ppe.get("player", {}) or {}
 					name, pos = resolve_name_pos(players, pid, pobj)
@@ -528,6 +531,9 @@ async def do_draft(conn, sess, season, season_map, players, dry_run, summary, wa
 		internal = season_map.get(espn_team_id)
 		if internal is None:
 			warnings.append(f"draft pick {overall}: unknown espn team id {espn_team_id}; skipped.")
+			continue
+		if pid is None:   # espn_player_id is NOT NULL (schema_v3 section 10)
+			warnings.append(f"draft pick {overall}: no playerId; skipped.")
 			continue
 		name, pos = resolve_name_pos(players, pid, None)
 		if dry_run:

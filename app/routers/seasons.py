@@ -230,12 +230,13 @@ async def weekly_scores(db, year):
 
 
 async def top_scorer(db, year):
-    """Highest-scoring individual player (starters only, regular season), or None before box
-    scores (2018)."""
+    """Highest-scoring individual player for one owner (starters only, regular season), or None
+    before box scores (2018). By ESPN player id, under the player's latest name that season."""
     row = await db.fetchrow("""
         SELECT
-            bs.player_name,
-            bs.position,
+            bs.espn_player_id,
+            (ARRAY_AGG(bs.player_name ORDER BY bs.week DESC))[1] AS player_name,
+            MODE() WITHIN GROUP (ORDER BY bs.position)          AS position,
             t.owner,
             SUM(bs.points_scored) AS total_points
         FROM box_scores bs
@@ -244,13 +245,14 @@ async def top_scorer(db, year):
         WHERE bs.season = $1
           AND bs.is_starter = TRUE
           AND NOT m.is_playoffs
-        GROUP BY bs.player_name, bs.position, t.owner
-        ORDER BY total_points DESC, bs.player_name, bs.position, t.owner
+        GROUP BY bs.espn_player_id, t.owner
+        ORDER BY total_points DESC, player_name, position, t.owner
         LIMIT 1
     """, year)
     if not row:
         return None
     return {
+        "espn_player_id": row["espn_player_id"],
         "player_name":  row["player_name"],
         "position":     row["position"],
         "owner":        row["owner"],

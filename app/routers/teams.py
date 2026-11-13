@@ -238,6 +238,6 @@ async def get_team(team_id: int):
             for row in h2h
         ],
         "best_weeks": [{**row, "points_scored": float(row["points_scored"])}
-                       for row in without(best_weeks, "place", "espn_player_id")],
+                       for row in without(best_weeks)],
         "position_totals": list(by_season.values()),
     }

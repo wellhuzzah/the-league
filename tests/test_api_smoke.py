@@ -1,7 +1,9 @@
 r"""
 API smoke test: every GET route in the app, called with realistic parameters, must return 200 and
 the top-level shape recorded in SHAPES (a list's length floor and its first item's keys, or a
-dict's keys). A GET route with no case here fails the test, so new routes get covered.
+dict's keys). A GET route with no case here fails the test, so new routes get covered. Every object
+anywhere in a response that has a player_name must also have an espn_player_id (Tower and a
+player's own card excepted), because the site links players by id.
 
 Unlike test_guardrails.py this needs the database: it starts uvicorn from this working tree on a
 spare loopback port (so it tests the code on disk, not the running service), which reads .env and
@@ -36,7 +38,8 @@ API_URL = dotenv_values(os.path.join(ROOT, ".env")).get("API_DATABASE_URL")
 
 # (route template, URL to call). Years: 2025 is the last complete season, 2026 is in progress,
 # 2012 predates box scores (2018+). Team 1 and 2, week 5, Josh Allen and WR have data everywhere;
-# teams 1 and 2 played in 2021 week 1; 3918298 is Josh Allen's ESPN id.
+# teams 1 and 2 played in 2021 week 1; 3918298 is Josh Allen's ESPN id, -16033 the Ravens D/ST's
+# (D/ST ids are negative) and 12549 Brandon Pettigrew's (drafted, never in a box score).
 CASES = [
 	("/", "/"),
 	("/seasons/", "/seasons/"),
@@ -63,6 +66,8 @@ CASES = [
 	("/players/search", "/players/search?q=Josh%20Allen"),
 	("/players/search", "/players/search?q=Ja%27Marr"),
 	("/players/{espn_player_id}", "/players/3918298"),
+	("/players/{espn_player_id}", "/players/-16033"),
+	("/players/{espn_player_id}", "/players/12549"),
 	("/tower/round", "/tower/round"),
 	("/tower/daily", "/tower/daily"),
 	("/tower/leaderboard", "/tower/leaderboard"),
@@ -100,12 +105,14 @@ SHAPES = {
 	'/boxscores/week/2025/5': ("dict", ['season', 'teams', 'week']),
 	'/boxscores/week/2025/5?include_bench=true': ("dict", ['season', 'teams', 'week']),
 	'/boxscores/week/2021/1?team_id=1&team_id=2': ("dict", ['season', 'teams', 'week']),
-	'/boxscores/random-player': ("dict", ['appearances', 'avg_points', 'best_game', 'best_game_detail', 'draft', 'player_name', 'position', 'seasons', 'top_owner', 'total_points', 'worst_game']),
+	'/boxscores/random-player': ("dict", ['appearances', 'avg_points', 'best_game', 'best_game_detail', 'draft', 'espn_player_id', 'player_name', 'position', 'seasons', 'top_owner', 'total_points', 'worst_game']),
 	'/boxscores/position/WR/summary': ("dict", ['bottom_games', 'by_season', 'draft', 'draft_by_season', 'most_drafted', 'most_rostered', 'position', 'scoring', 'top_games']),
 	'/boxscores/position/D%2FST/summary': ("dict", ['bottom_games', 'by_season', 'draft', 'draft_by_season', 'most_drafted', 'most_rostered', 'position', 'scoring', 'top_games']),
 	'/players/search?q=Josh%20Allen': ("dict", ['players', 'query']),
 	'/players/search?q=Ja%27Marr': ("dict", ['players', 'query']),
 	'/players/3918298': ("dict", ['box', 'draft', 'espn_player_id', 'player_name', 'transactions']),
+	'/players/-16033': ("dict", ['box', 'draft', 'espn_player_id', 'player_name', 'transactions']),
+	'/players/12549': ("dict", ['box', 'draft', 'espn_player_id', 'player_name', 'transactions']),
 	'/tower/round': ("dict", ['count', 'questions']),
 	'/tower/daily': ("dict", ['count', 'daily_seed', 'questions']),
 	'/tower/leaderboard': ("dict", ['daily_seed', 'entries']),
@@ -113,11 +120,11 @@ SHAPES = {
 	'/transactions/season/2025/week/5': ("dict", ['season', 'transactions', 'week']),
 	'/transactions/team/1/season/2025': ("dict", ['owner', 'season', 'team_id', 'transactions']),
 	'/transactions/team/1': ("dict", ['owner', 'seasons', 'team_id']),
-	'/transactions/records/biggest-bids': ("list", ['bid_amount', 'event_at', 'owner', 'player_name', 'position', 'season', 'team_id', 'week'], 25),
-	'/transactions/records/biggest-losing-bids': ("list", ['bid_amount', 'event_at', 'owner', 'player_name', 'position', 'season', 'status', 'team_id', 'week', 'winner_owner', 'winning_bid'], 25),
-	'/transactions/records/biggest-overpays': ("list", ['bid_amount', 'event_at', 'overpay', 'owner', 'player_name', 'position', 'runner_up_bid', 'runner_up_owner', 'season', 'team_id', 'week'], 25),
-	'/transactions/records/bargains': ("list", ['bid_amount', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
-	'/transactions/records/bargains?paid=false&season=2025': ("list", ['bid_amount', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
+	'/transactions/records/biggest-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'owner', 'player_name', 'position', 'season', 'team_id', 'week'], 25),
+	'/transactions/records/biggest-losing-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'owner', 'player_name', 'position', 'season', 'status', 'team_id', 'week', 'winner_owner', 'winning_bid'], 25),
+	'/transactions/records/biggest-overpays': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'overpay', 'owner', 'player_name', 'position', 'runner_up_bid', 'runner_up_owner', 'season', 'team_id', 'week'], 25),
+	'/transactions/records/bargains': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
+	'/transactions/records/bargains?paid=false&season=2025': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
 	'/transactions/records/most-contested': ("list", ['bids', 'claims', 'espn_player_id', 'player_name', 'position', 'run_date', 'season', 'teams', 'week', 'winner_owner', 'winning_bid'], 25),
 }
 
@@ -140,6 +147,27 @@ def shape_problem(body, expected):
 	if got != keys:
 		return f"keys differ: missing {sorted(set(keys) - set(got))}, extra {sorted(set(got) - set(keys))}"
 	return None
+
+
+def unlinked_players(body, path="$"):
+	"""Paths of objects that name a player (player_name) but carry no espn_player_id. The site links
+	every player name by id, never by name, so every player object needs one."""
+	found = []
+	if isinstance(body, dict):
+		if "player_name" in body and body.get("espn_player_id") is None:
+			found.append(path)
+		for k, v in body.items():
+			found += unlinked_players(v, f"{path}.{k}")
+	elif isinstance(body, list):
+		for i, v in enumerate(body):
+			found += unlinked_players(v, f"{path}[{i}]")
+	return found
+
+
+# Responses exempt from unlinked_players: the Tower (quiz questions, not player objects) and a
+# player's own card, whose rows are all that player (the card's top level carries the id).
+def needs_player_ids(url):
+	return not url.startswith("/tower/") and not (url.startswith("/players/") and not url.startswith("/players/search"))
 
 
 @unittest.skipUnless(API_URL, "API_DATABASE_URL not set in .env")
@@ -207,6 +235,8 @@ class ApiSmoke(unittest.TestCase):
 					self.fail(f"{url} -> {e.code}\n{self.server_tail()}")
 				self.assertEqual(status, 200)
 				self.assertIn(url, SHAPES, "no SHAPES entry")
+				if needs_player_ids(url):
+					self.assertEqual(unlinked_players(body)[:5], [], f"{url}: player objects without espn_player_id")
 				problem = shape_problem(body, SHAPES[url])
 				self.assertIsNone(problem, f"{url}: {problem}")
 

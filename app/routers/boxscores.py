@@ -18,6 +18,7 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
     async with (await get_pool()).acquire() as db:
         rows = await db.fetch("""
             SELECT
+                bs.espn_player_id,
                 bs.player_name,
                 bs.position,
                 bs.points_scored,
@@ -41,6 +42,7 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
             if o not in teams:
                 teams[o] = {"owner": o, "team_id": row["team_id"], "players": []}
             teams[o]["players"].append({
+                "espn_player_id": row["espn_player_id"],
                 "player_name":  row["player_name"],
                 "position":     row["position"],
                 "points_scored": float(row["points_scored"]),
@@ -54,8 +56,9 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
         }
 
 
-async def random_player_card(name, player):
-    """The random-player card for a picked player (a row of the pick query)."""
+async def random_player_card(player):
+    """The random-player card for a picked player (a row of the pick query), all by ESPN player id."""
+    pid = player["espn_player_id"]
     best_game_row, top_owner, draft_info, seasons = await concurrently(
         # Best single game details
         lambda db: db.fetchrow("""
@@ -74,22 +77,22 @@ async def random_player_card(name, player):
                 WHEN m.home_team_id = bs.team_id THEN m.away_team_id
                 ELSE m.home_team_id
             END
-            WHERE bs.player_name = $1
+            WHERE bs.espn_player_id = $1
               AND bs.is_starter = TRUE
-            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
+            ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id
             LIMIT 1
-        """, name),
+        """, pid),
         # Owner who had them most
         lambda db: db.fetchrow("""
             SELECT t.owner, t.team_id, COUNT(*) AS appearances
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
-            WHERE bs.player_name = $1
+            WHERE bs.espn_player_id = $1
               AND bs.is_starter = TRUE
             GROUP BY t.owner, t.team_id
             ORDER BY appearances DESC, t.owner, t.team_id
             LIMIT 1
-        """, name),
+        """, pid),
         lambda db: db.fetchrow("""
             SELECT
                 COUNT(*)                                AS times_drafted,
@@ -97,18 +100,19 @@ async def random_player_card(name, player):
                 MIN(overall_pick)                      AS earliest_pick,
                 MIN(season)                            AS first_drafted
             FROM draft_picks
-            WHERE lower(player_name) = lower($1)
-        """, name),
+            WHERE espn_player_id = $1
+        """, pid),
         lambda db: db.fetch("""
             SELECT DISTINCT season
             FROM box_scores
-            WHERE player_name = $1
+            WHERE espn_player_id = $1
               AND is_starter = TRUE
             ORDER BY season
-        """, name),
+        """, pid),
     )
     return {
-        "player_name":   name,
+        "espn_player_id": pid,
+        "player_name":   player["player_name"],
         "position":      player["position"],
         "appearances":   player["appearances"],
         "avg_points":    float(player["avg_points"]),
@@ -141,12 +145,14 @@ async def random_player_card(name, player):
 
 @router.get("/random-player")
 async def get_random_player():
-    """A random player (5+ starts) with highlight stats."""
+    """A random player (5+ starts) with highlight stats. One per ESPN player id: the name is the
+    player's latest, the position their most frequent (Taysom Hill started as QB and TE)."""
     async with (await get_pool()).acquire() as db:
         player = await db.fetchrow("""
             SELECT
-                player_name,
-                position,
+                espn_player_id,
+                (ARRAY_AGG(player_name ORDER BY season DESC, week DESC))[1] AS player_name,
+                MODE() WITHIN GROUP (ORDER BY position)        AS position,
                 COUNT(*)                                        AS appearances,
                 ROUND(AVG(points_scored)::numeric, 2)          AS avg_points,
                 ROUND(MAX(points_scored)::numeric, 2)          AS best_game,
@@ -155,14 +161,14 @@ async def get_random_player():
             FROM box_scores
             WHERE position != 'UNK'
               AND is_starter = TRUE
-            GROUP BY player_name, position
+            GROUP BY espn_player_id
             HAVING COUNT(*) >= 5
             ORDER BY RANDOM()
             LIMIT 1
         """)
     if not player:
         return None
-    return await random_player_card(player["player_name"], player)
+    return await random_player_card(player)
 
 
 @router.get("/position/{position:path}/summary")
@@ -238,10 +244,12 @@ async def get_position_summary(position: str):
               AND bs.is_starter = TRUE
               AND bs.played IS DISTINCT FROM FALSE
         """, "points_scored ASC", "points_scored ASC, season, week, team_id, espn_player_id", "5"), pos),
-        # Most appearances (most rostered players at this position)
+        # Most appearances (most rostered players at this position), one row per ESPN player id
+        # under the latest name it had at this position
         lambda db: db.fetch(top_n("""
             SELECT
-                bs.player_name,
+                bs.espn_player_id,
+                (ARRAY_AGG(bs.player_name ORDER BY bs.season DESC, bs.week DESC))[1] AS player_name,
                 COUNT(*)                                        AS appearances,
                 ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
                 ROUND(SUM(bs.points_scored)::numeric, 1)       AS total_points,
@@ -251,8 +259,8 @@ async def get_position_summary(position: str):
             WHERE bs.position = $1
               AND bs.is_starter = TRUE
               AND NOT m.is_playoffs
-            GROUP BY bs.player_name
-        """, "appearances DESC", "appearances DESC, player_name", "10"), pos),
+            GROUP BY bs.espn_player_id
+        """, "appearances DESC", "appearances DESC, player_name, espn_player_id", "10"), pos),
         # Avg points by season (trend over time)
         lambda db: db.fetch("""
             SELECT
@@ -291,10 +299,12 @@ async def get_position_summary(position: str):
             GROUP BY season
             ORDER BY season
         """, pos),
-        # Most drafted players at this position (draft history)
+        # Most drafted players at this position (draft history), one row per ESPN player id under
+        # the latest name it was drafted as (three different Mike Williamses were drafted)
         lambda db: db.fetch(top_n("""
             SELECT
-                player_name,
+                espn_player_id,
+                (ARRAY_AGG(player_name ORDER BY season DESC, overall_pick DESC))[1] AS player_name,
                 COUNT(*)                                        AS times_drafted,
                 ROUND(AVG(overall_pick)::numeric, 1)           AS avg_pick,
                 MIN(overall_pick)                              AS earliest_pick,
@@ -303,10 +313,10 @@ async def get_position_summary(position: str):
                 SUM(CASE WHEN is_keeper THEN 1 ELSE 0 END)    AS keeper_count
             FROM draft_picks
             WHERE position = $1
-            GROUP BY player_name
-        """, "times_drafted DESC", "times_drafted DESC, player_name", "10"), pos),
+            GROUP BY espn_player_id
+        """, "times_drafted DESC", "times_drafted DESC, player_name, espn_player_id", "10"), pos),
     )
-    top_games, bottom_games = without(top_games, "place", "espn_player_id"), without(bottom_games, "place", "espn_player_id")
+    top_games, bottom_games = without(top_games), without(bottom_games)
     most_rostered, most_drafted = without(most_rostered), without(most_drafted)
 
     return {

@@ -264,3 +264,18 @@ CREATE UNIQUE INDEX tower_scores_best_free ON tower_scores (lower(trim(player_na
 GRANT UPDATE ON tower_scores TO rockwood_api;
 
 COMMIT;
+
+-- ===========================================================================
+-- 10. espn_player_id NOT NULL on draft_picks and box_scores   (2026-11-13, clickable player names)
+-- ===========================================================================
+-- The site links every player name by ESPN id, never by name, so every row needs one. Both tables
+-- had 0 nulls (transaction_items already forbids them). espn_import.py skips, with a warning, any
+-- roster entry or draft pick ESPN sends without a playerId.
+-- Applied by scripts\player_id_not_null.sql. Undo: scripts\rollback_player_id_not_null.sql
+--   ALTER TABLE draft_picks ALTER COLUMN espn_player_id DROP NOT NULL;
+--   ALTER TABLE box_scores  ALTER COLUMN espn_player_id DROP NOT NULL;
+
+BEGIN;
+ALTER TABLE draft_picks ALTER COLUMN espn_player_id SET NOT NULL;
+ALTER TABLE box_scores  ALTER COLUMN espn_player_id SET NOT NULL;
+COMMIT;

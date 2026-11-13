@@ -16,6 +16,7 @@ SCORED_SEASONS = "SELECT DISTINCT season FROM box_scores"
 PICK_VALUE = """
     SELECT
         dp.season,
+        dp.espn_player_id,
         dp.player_name,
         dp.position,
         dp.overall_pick,
@@ -34,7 +35,7 @@ PICK_VALUE = """
        AND bs.season = dp.season
        AND bs.is_starter = TRUE
     {where}
-    GROUP BY dp.season, dp.player_name, dp.position, dp.overall_pick,
+    GROUP BY dp.season, dp.espn_player_id, dp.player_name, dp.position, dp.overall_pick,
              dp.round_num, dp.pick_in_round, dp.is_keeper, t.owner, t.team_id
     ORDER BY dp.season, dp.overall_pick
 """
@@ -43,6 +44,7 @@ PICK_VALUE = """
 def value_pick(row, with_season):
     pick = {"season": row["season"]} if with_season else {}
     pick.update({
+        "espn_player_id": row["espn_player_id"],
         "player_name":   row["player_name"],
         "position":      row["position"],
         "overall_pick":  row["overall_pick"],
@@ -160,6 +162,7 @@ async def search_player_draft_history(player_name: str):
                 dp.overall_pick,
                 dp.round_num,
                 dp.pick_in_round,
+                dp.espn_player_id,
                 dp.player_name,
                 dp.position,
                 dp.is_keeper,
@@ -235,6 +238,7 @@ async def get_draft(year: int):
         rounds.setdefault(row["round_num"], []).append({
             "overall_pick":  row["overall_pick"],
             "pick_in_round": row["pick_in_round"],
+            "espn_player_id": row["espn_player_id"],
             "player_name":   row["player_name"],
             "position":      row["position"],
             "is_keeper":     row["is_keeper"],
