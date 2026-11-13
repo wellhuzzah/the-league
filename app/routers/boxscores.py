@@ -267,7 +267,7 @@ async def get_position_summary(position: str):
                 bs.season,
                 ROUND(AVG(bs.points_scored)::numeric, 2)       AS avg_points,
                 ROUND(MAX(bs.points_scored)::numeric, 2)       AS max_points,
-                COUNT(DISTINCT bs.player_name)                 AS unique_players
+                COUNT(DISTINCT bs.espn_player_id)              AS unique_players
             FROM box_scores bs
             JOIN matchups m ON bs.matchup_id = m.id
             WHERE bs.position = $1
