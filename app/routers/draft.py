@@ -1,7 +1,7 @@
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
-from app.params import Limit, like_escape, search_term
+from app.params import Limit
 
 router = APIRouter(
     prefix="/draft",
@@ -146,42 +146,6 @@ async def draft_tendencies(db):
         })
 
     return sorted(result, key=lambda x: x["owner"])
-
-
-@router.get("/player/{player_name:path}")
-async def search_player_draft_history(player_name: str):
-    """
-    Search how many times and by whom a player has been drafted (Draft page search).
-    Case-insensitive partial match on at least 2 characters; % and _ match literally.
-    """
-    term = search_term(player_name)
-    async with (await get_pool()).acquire() as db:
-        rows = await db.fetch("""
-            SELECT
-                dp.season,
-                dp.overall_pick,
-                dp.round_num,
-                dp.pick_in_round,
-                dp.espn_player_id,
-                dp.player_name,
-                dp.position,
-                dp.is_keeper,
-                t.owner,
-                t.team_id
-            FROM draft_picks dp
-            JOIN teams t ON dp.team_id = t.team_id
-            WHERE dp.player_name ILIKE $1
-            ORDER BY dp.season, dp.overall_pick
-        """, f"%{like_escape(term)}%")
-
-        if not rows:
-            return {"query": player_name, "results": [], "times_drafted": 0}
-
-        return {
-            "query":         player_name,
-            "times_drafted": len(rows),
-            "results":       [dict(row) for row in rows],
-        }
 
 
 @router.get("/value/history")

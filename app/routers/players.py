@@ -121,7 +121,7 @@ def box_history(rows, label):
 
 
 def draft_history(rows, label):
-    """A player's draft picks in draft order (same shape as /draft/player/{name})."""
+    """A player's draft picks in draft order (the Draft page's Player Draft History shows these)."""
     if not rows:
         return {"query": label, "results": [], "times_drafted": 0}
     return {"query": label, "times_drafted": len(rows), "results": [dict(row) for row in rows]}
