@@ -5,7 +5,8 @@ dict's keys). A GET route with no case here fails the test, so new routes get co
 
 Unlike test_guardrails.py this needs the database: it starts uvicorn from this working tree on a
 spare loopback port (so it tests the code on disk, not the running service), which reads .env and
-connects as rockwood_api, exactly as production does. Read-only: it never calls POST /tower/score.
+connects as rockwood_api, exactly as production does. It never calls POST /tower/score; its only write
+is GET /tower/daily storing today's round in tower_daily when no request has yet (as production would).
 
 	venv\Scripts\python.exe -B -m unittest tests.test_api_smoke -v
 
@@ -208,6 +209,22 @@ class ApiSmoke(unittest.TestCase):
 				self.assertIn(url, SHAPES, "no SHAPES entry")
 				problem = shape_problem(body, SHAPES[url])
 				self.assertIsNone(problem, f"{url}: {problem}")
+
+	def test_tower_questions(self):
+		# Every question carries its options and the two distractors the client removes, in order
+		keys = ['answer', 'board', 'category', 'difficulty', 'eliminate', 'flavor', 'framing', 'id', 'options', 'question']
+		for url in ("/tower/round", "/tower/daily"):
+			body = json.load(urllib.request.urlopen(self.base + url, timeout=60))
+			self.assertEqual(body["count"], 10, url)
+			for q in body["questions"]:
+				with self.subTest(url=url, id=q["id"]):
+					self.assertEqual(sorted(q), keys)
+					self.assertEqual(len(set(q["options"])), 4)
+					self.assertIn(q["answer"], q["options"])
+					self.assertEqual(len(set(q["eliminate"])), 2)
+					self.assertTrue(set(q["eliminate"]) <= set(q["options"]) - {q["answer"]})
+		daily = [json.load(urllib.request.urlopen(self.base + "/tower/daily", timeout=60)) for _ in range(2)]
+		self.assertEqual(daily[0], daily[1])
 
 	def test_luck_adds_up(self):
 		# Luck sums to 0 over the league (up to each row's rounding to 0.01), per season and career;

@@ -14,6 +14,28 @@ def win_pct(wins, losses, draws):
     return round((wins + 0.5 * draws) / games, 3) if games else 0.0
 
 
+# All-time record of each team against every opponent, toilet bowl games aside (lineups often go
+# unset). The Team page reads one team's rows ({where} = "AND tg.team_id = $1"); the Tower reads all.
+OPPONENT_RECORDS = """
+    SELECT
+        t.owner,
+        opp.team_id                                         AS opp_team_id,
+        opp.owner                                           AS opponent,
+        COUNT(*)                                            AS total_games,
+        COUNT(*) FILTER (WHERE tg.result = 'W')             AS wins,
+        COUNT(*) FILTER (WHERE tg.result = 'L')             AS losses,
+        COUNT(*) FILTER (WHERE tg.result = 'T')             AS ties,
+        ROUND(AVG(tg.score), 2)                             AS avg_score_for,
+        ROUND(AVG(tg.opp_score), 2)                         AS avg_score_against
+    FROM team_games tg
+    JOIN teams t   ON t.team_id = tg.team_id
+    JOIN teams opp ON opp.team_id = tg.opp_id
+    WHERE tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER' {where}
+    GROUP BY t.owner, opp.team_id, opp.owner
+    ORDER BY t.owner, wins DESC, opp.owner
+"""
+
+
 async def career_totals(db):
     """Career summary for every owner, most wins first. Serves /teams/ and the Records page's
     all-time standings (which drops owners with no finished season)."""
@@ -108,23 +130,7 @@ async def get_team(team_id: int):
             FROM records
             WHERE team_id = $1
         """, team_id),
-        # All-time record against every opponent, toilet bowl games aside (lineups often go unset)
-        lambda db: db.fetch("""
-            SELECT
-                opp.team_id                                         AS opp_team_id,
-                opp.owner                                           AS opponent,
-                COUNT(*)                                            AS total_games,
-                COUNT(*) FILTER (WHERE tg.result = 'W')             AS wins,
-                COUNT(*) FILTER (WHERE tg.result = 'L')             AS losses,
-                COUNT(*) FILTER (WHERE tg.result = 'T')             AS ties,
-                ROUND(AVG(tg.score), 2)                             AS avg_score_for,
-                ROUND(AVG(tg.opp_score), 2)                         AS avg_score_against
-            FROM team_games tg
-            JOIN teams opp ON opp.team_id = tg.opp_id
-            WHERE tg.team_id = $1 AND tg.playoff_tier IS DISTINCT FROM 'LOSERS_CONSOLATION_LADDER'
-            GROUP BY opp.team_id, opp.owner
-            ORDER BY wins DESC, opp.owner
-        """, team_id),
+        lambda db: db.fetch(OPPONENT_RECORDS.format(where="AND tg.team_id = $1"), team_id),
         # Best and worst single-week scores
         lambda db: db.fetchrow("""
             SELECT MAX(score) AS highest_score, MIN(score) AS lowest_score,

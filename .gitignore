@@ -24,6 +24,8 @@ __pycache__/
 !/scripts/rollback_playoff_tier.sql
 !/scripts/records_audit_fix.sql
 !/scripts/rollback_records_audit.sql
+!/scripts/tower_overhaul.sql
+!/scripts/rollback_tower_overhaul.sql
 /espn_raw/
 /backups/
 /docs/*

@@ -14,6 +14,8 @@ LOSING_BID_SEASONS = list(range(2019, 2027))
 
 # One event time per transaction: processDate exists only on waiver rows.
 EVENT_AT = "COALESCE(t.processed_at, t.proposed_at)"
+# FAAB spent: the sum of winning waiver bids (ESPN's budgetSpent also counts FAAB traded away; this doesn't).
+FAAB_SPENT = "COALESCE(SUM(t.bid_amount) FILTER (WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED'), 0)"
 # A waiver run = all claims processed on the same UTC date.
 RUN_DATE = f"({EVENT_AT} AT TIME ZONE 'UTC')::date"
 
@@ -37,13 +39,12 @@ RUN_WINNER = f"""LEFT JOIN LATERAL (
 async def get_transaction_seasons():
 	"""Seasons with transaction data."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch("""
+		rows = await db.fetch(f"""
 			SELECT
 				t.season,
 				COUNT(*)                                                                       AS transactions,
 				COUNT(*) FILTER (WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED')            AS waiver_claims_won,
-				COALESCE(SUM(t.bid_amount) FILTER (WHERE t.type = 'WAIVER'
-				                                     AND t.status = 'EXECUTED'), 0)            AS faab_spent,
+				{FAAB_SPENT}                                                                   AS faab_spent,
 				COUNT(*) FILTER (WHERE t.type = 'FREEAGENT' AND t.status = 'EXECUTED')         AS free_agent_moves,
 				MIN(t.week)                                                                    AS first_week,
 				MAX(t.week)                                                                    AS last_week,
@@ -180,11 +181,10 @@ async def get_team_transactions(team_id: int):
 		if not team:
 			raise HTTPException(status_code=404, detail="Team not found")
 
-		rows = await db.fetch("""
+		rows = await db.fetch(f"""
 			SELECT
 				t.season,
-				COALESCE(SUM(t.bid_amount) FILTER (WHERE t.type = 'WAIVER'
-				                                     AND t.status = 'EXECUTED'), 0)          AS faab_spent,
+				{FAAB_SPENT}                                                                 AS faab_spent,
 				COUNT(*) FILTER (WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED')          AS claims_won,
 				COUNT(*) FILTER (WHERE t.type = 'WAIVER'
 				                   AND t.status = 'FAILED_INVALIDPLAYERSOURCE')              AS claims_lost,
@@ -252,28 +252,33 @@ async def player_transactions(db, espn_player_id, label):
 	}
 
 
+async def biggest_bids(db, limit, season=None):
+	"""Top winning (EXECUTED) WAIVER bids, every bid tied with the last kept; with place and espn_txn_id
+	(the route drops them). Also read by the Tower."""
+	return await db.fetch(top_n(f"""
+		SELECT
+			t.bid_amount,
+			tm.owner,
+			tm.team_id,
+			i.player_name,
+			i.position,
+			t.season,
+			t.week,
+			{EVENT_AT} AS event_at,
+			t.espn_txn_id
+		FROM transactions t
+		JOIN teams tm            ON tm.team_id = t.team_id
+		JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
+		WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED'
+		  AND ($2::numeric IS NULL OR t.season = $2)
+	""", "bid_amount DESC", "bid_amount DESC, season, week, espn_txn_id", "$1"), limit, season)
+
+
 @router.get("/records/biggest-bids")
 async def get_biggest_bids(limit: int = Limit(25), season: int = None):
 	"""Top winning (EXECUTED) WAIVER bids."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(top_n(f"""
-			SELECT
-				t.bid_amount,
-				tm.owner,
-				tm.team_id,
-				i.player_name,
-				i.position,
-				t.season,
-				t.week,
-				{EVENT_AT} AS event_at,
-				t.espn_txn_id
-			FROM transactions t
-			JOIN teams tm            ON tm.team_id = t.team_id
-			JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
-			WHERE t.type = 'WAIVER' AND t.status = 'EXECUTED'
-			  AND ($2::numeric IS NULL OR t.season = $2)
-		""", "bid_amount DESC", "bid_amount DESC, season, week, espn_txn_id", "$1"), limit, season)
-		return without(rows, "place", "espn_txn_id")
+		return without(await biggest_bids(db, limit, season), "place", "espn_txn_id")
 
 
 @router.get("/records/biggest-losing-bids")
@@ -444,39 +449,45 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 		]
 
 
+async def most_contested(db, limit, season=None):
+	"""Players claimed by the most distinct teams in a single waiver run (see the route), with bids as
+	JSON text and place. Also read by the Tower."""
+	return await db.fetch(top_n(f"""
+		WITH claims AS (
+			SELECT t.season, t.week, {RUN_DATE} AS run_date, i.espn_player_id, i.player_name, i.position,
+			       t.team_id, tm.owner, t.bid_amount, t.status, t.id
+			FROM transactions t
+			JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
+			JOIN teams tm            ON tm.team_id = t.team_id
+			WHERE t.type = 'WAIVER' AND t.status IN ('EXECUTED', 'FAILED_INVALIDPLAYERSOURCE')
+			  AND t.season = ANY($2::numeric[])
+			  AND ($3::numeric IS NULL OR t.season = $3)
+		)
+		SELECT
+			c.season,
+			MIN(c.week)                                                   AS week,
+			c.run_date,
+			c.espn_player_id,
+			MIN(c.player_name)                                            AS player_name,
+			MIN(c.position)                                               AS position,
+			COUNT(DISTINCT c.team_id)                                     AS teams,
+			COUNT(*)                                                      AS claims,
+			MAX(c.bid_amount) FILTER (WHERE c.status = 'EXECUTED')        AS winning_bid,
+			MIN(c.owner) FILTER (WHERE c.status = 'EXECUTED')             AS winner_owner,
+			json_agg(json_build_object('owner', c.owner, 'bid_amount', c.bid_amount, 'status', c.status)
+			         ORDER BY c.bid_amount DESC, c.owner, c.id)::text     AS bids
+		FROM claims c
+		GROUP BY c.season, c.run_date, c.espn_player_id
+		HAVING COUNT(DISTINCT c.team_id) > 1
+	""", "teams DESC", "teams DESC, claims DESC, winning_bid DESC NULLS LAST, season, run_date, espn_player_id", "$1"),
+		limit, LOSING_BID_SEASONS, season)
+
+
 @router.get("/records/most-contested")
 async def get_most_contested(limit: int = Limit(25), season: int = None):
 	"""Players claimed by the most distinct teams in a single waiver run. Counts the winning claim and
 	outbid (FAILED_INVALIDPLAYERSOURCE) claims only; cancelled and other failed claims are left out.
 	A pickup only one team claimed wasn't contested and isn't listed."""
 	async with (await get_pool()).acquire() as db:
-		rows = await db.fetch(top_n(f"""
-			WITH claims AS (
-				SELECT t.season, t.week, {RUN_DATE} AS run_date, i.espn_player_id, i.player_name, i.position,
-				       t.team_id, tm.owner, t.bid_amount, t.status, t.id
-				FROM transactions t
-				JOIN transaction_items i ON i.transaction_id = t.id AND i.item_type = 'ADD'
-				JOIN teams tm            ON tm.team_id = t.team_id
-				WHERE t.type = 'WAIVER' AND t.status IN ('EXECUTED', 'FAILED_INVALIDPLAYERSOURCE')
-				  AND t.season = ANY($2::numeric[])
-				  AND ($3::numeric IS NULL OR t.season = $3)
-			)
-			SELECT
-				c.season,
-				MIN(c.week)                                                   AS week,
-				c.run_date,
-				c.espn_player_id,
-				MIN(c.player_name)                                            AS player_name,
-				MIN(c.position)                                               AS position,
-				COUNT(DISTINCT c.team_id)                                     AS teams,
-				COUNT(*)                                                      AS claims,
-				MAX(c.bid_amount) FILTER (WHERE c.status = 'EXECUTED')        AS winning_bid,
-				MIN(c.owner) FILTER (WHERE c.status = 'EXECUTED')             AS winner_owner,
-				json_agg(json_build_object('owner', c.owner, 'bid_amount', c.bid_amount, 'status', c.status)
-				         ORDER BY c.bid_amount DESC, c.owner, c.id)::text     AS bids
-			FROM claims c
-			GROUP BY c.season, c.run_date, c.espn_player_id
-			HAVING COUNT(DISTINCT c.team_id) > 1
-		""", "teams DESC", "teams DESC, claims DESC, winning_bid DESC NULLS LAST, season, run_date, espn_player_id", "$1"),
-			limit, LOSING_BID_SEASONS, season)
+		rows = await most_contested(db, limit, season)
 		return [{**row, "bids": json.loads(row["bids"])} for row in without(rows)]

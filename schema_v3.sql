@@ -236,3 +236,31 @@ SELECT m.id, m.season, m.week, m.is_playoffs,
 FROM matchups m;
 
 COMMIT;
+
+-- ===========================================================================
+-- 9. The Tower: tower_daily, keep-best tower_scores   (2026-11-12, Tower overhaul)
+-- ===========================================================================
+-- tower_daily: GET /tower/daily stores the day's round on the first request (INSERT ... ON CONFLICT
+-- DO NOTHING, then reads the row back), so the daily is the same for everyone all day, across API
+-- restarts and the Thursday import. rockwood_backup reads it through pg_read_all_data.
+-- tower_scores: one row per player per board (each daily, and free play), the name compared trimmed
+-- and case-insensitively; POST /tower/score upserts and only a higher score replaces the row.
+-- Applied by scripts\tower_overhaul.sql (which also dedupes first; no rows matched).
+-- Undo: scripts\rollback_tower_overhaul.sql (rollback_tower_overhaul.ps1 also restores the code).
+
+BEGIN;
+
+CREATE TABLE tower_daily (
+	daily_seed  DATE PRIMARY KEY,
+	questions   JSONB NOT NULL,
+	created_at  TIMESTAMPTZ DEFAULT now()
+);
+GRANT SELECT, INSERT ON tower_daily TO rockwood_api;
+
+CREATE UNIQUE INDEX tower_scores_best_daily ON tower_scores (lower(trim(player_name)), daily_seed)
+	WHERE daily_seed IS NOT NULL;
+CREATE UNIQUE INDEX tower_scores_best_free ON tower_scores (lower(trim(player_name)))
+	WHERE daily_seed IS NULL;
+GRANT UPDATE ON tower_scores TO rockwood_api;
+
+COMMIT;
