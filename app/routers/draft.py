@@ -13,6 +13,17 @@ router = APIRouter(
 # Value (steals/busts) only means something for seasons with box scores (2018 on): before that every
 # pick has 0 points, so those seasons get no ranking.
 SCORED_SEASONS = "SELECT DISTINCT season FROM box_scores"
+
+# Positions that can't be a steal. A last-round kicker who edges out the other kickers still jumps
+# ~150 rank spots, but the best kicker is worth ~0.6 ppg over a replacement (about one game every
+# seven seasons). Defenses are streamed: one team rarely keeps a D/ST all season, so a drafted one
+# outscoring its slot isn't a steal either. Both still count in scoring_rank, so other picks' value
+# is unchanged. The Draft page's season Steals table applies the same exclusion (rockwood-ui Draft.jsx).
+NOT_STEALS = {"K", "D/ST"}
+
+
+def can_steal(pick):
+    return pick["season_points"] > 0 and pick["position"] not in NOT_STEALS
 PICK_VALUE = """
     SELECT
         dp.season,
@@ -60,14 +71,13 @@ def value_pick(row, with_season):
 
 def rank_season(picks):
     """Add scoring_rank (by season points; unscored picks rank last) and value_gap (pick minus
-    rank) to one season's picks, in place. Returns the scored picks, best first."""
+    rank) to one season's picks, in place."""
     scored = sorted([p for p in picks if p["season_points"] > 0],
                     key=lambda p: p["season_points"], reverse=True)
     rank_map = {p["overall_pick"]: i + 1 for i, p in enumerate(scored)}
     for p in picks:
         p["scoring_rank"] = rank_map.get(p["overall_pick"], len(picks) + 1)
         p["value_gap"] = p["overall_pick"] - p["scoring_rank"]
-    return scored
 
 
 @router.get("/")
@@ -164,7 +174,7 @@ async def get_value_history(limit: int = Limit(25)):
         all_picks.extend(season_picks)
 
     steals = with_ties(sorted(
-        [p for p in all_picks if p["season_points"] > 0],
+        [p for p in all_picks if can_steal(p)],
         key=lambda p: p["value_gap"], reverse=True
     ), limit, "value_gap")
 
@@ -213,8 +223,9 @@ async def get_draft(year: int):
     picks, steal, bust = [], None, None
     if has_scoring:
         picks = [value_pick(row, with_season=False) for row in rows]
-        scored = rank_season(picks)
-        steal = max(scored, key=lambda p: p["value_gap"]) if scored else None
+        rank_season(picks)
+        candidates = [p for p in picks if can_steal(p)]
+        steal = max(candidates, key=lambda p: p["value_gap"]) if candidates else None
         early = [p for p in picks if p["round_num"] <= 2]
         bust  = min(early, key=lambda p: p["season_points"]) if early else None
 
