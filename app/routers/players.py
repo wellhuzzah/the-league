@@ -10,6 +10,10 @@ router = APIRouter(
 
 SEARCH_LIMIT = 20
 
+# NFL teams (player_team_weeks, players, nfl_teams; nfl_team_import.py). No row means unknown:
+# nfl_team and nfl_team_name are then NULL and the site shows nothing.
+NFL_NAME = "nt.location || ' ' || nt.name"
+
 # A player's most recent name anywhere (ESPN renames: "Mark Ingram" -> "Mark Ingram II"), from box
 # scores, draft picks and transactions; {pid} is the SQL expression for the player id.
 LATEST_NAME = """(
@@ -130,8 +134,11 @@ def draft_history(rows, label):
 @router.get("/{espn_player_id}")
 async def get_player(espn_player_id: int):
     """One player's card in one call: starts (box), draft picks and executed adds/drops, all by
-    ESPN player id, so a renamed player is one card and two players who share a name are two."""
-    box, draft, transactions, names = await concurrently(
+    ESPN player id, so a renamed player is one card and two players who share a name are two.
+    NFL teams: nfl_team / nfl_team_name at the top are the team now (NULL: none, or retired); each
+    box row has the team that week, each draft row the team in Week 1 of that season (NULL:
+    unknown)."""
+    box, draft, transactions, names, now = await concurrently(
         lambda db: db.fetch("""
             SELECT
                 bs.season,
@@ -143,10 +150,15 @@ async def get_player(espn_player_id: int):
                 t.owner,
                 t.team_id,
                 m.is_playoffs,
-                m.playoff_tier
+                m.playoff_tier,
+                nt.abbrev AS nfl_team,
+                """ + NFL_NAME + """ AS nfl_team_name
             FROM box_scores bs
             JOIN teams t ON bs.team_id = t.team_id
             JOIN matchups m ON bs.matchup_id = m.id
+            LEFT JOIN player_team_weeks w
+                   ON w.espn_player_id = bs.espn_player_id AND w.season = bs.season AND w.week = bs.week
+            LEFT JOIN nfl_teams nt ON nt.season = w.season AND nt.pro_team_id = w.pro_team_id
             WHERE bs.espn_player_id = $1
               AND bs.is_starter = TRUE
             ORDER BY bs.points_scored DESC, bs.season, bs.week, bs.team_id, bs.espn_player_id
@@ -161,14 +173,24 @@ async def get_player(espn_player_id: int):
                 dp.position,
                 dp.is_keeper,
                 t.owner,
-                t.team_id
+                t.team_id,
+                nt.abbrev AS nfl_team,
+                """ + NFL_NAME + """ AS nfl_team_name
             FROM draft_picks dp
             JOIN teams t ON dp.team_id = t.team_id
+            LEFT JOIN player_team_weeks w
+                   ON w.espn_player_id = dp.espn_player_id AND w.season = dp.season AND w.week = 1
+            LEFT JOIN nfl_teams nt ON nt.season = w.season AND nt.pro_team_id = w.pro_team_id
             WHERE dp.espn_player_id = $1
             ORDER BY dp.season, dp.overall_pick
         """, espn_player_id),
         lambda db: player_transactions(db, espn_player_id, None),
         lambda db: db.fetchrow(f"SELECT {LATEST_NAME.format(pid='$1')} AS player_name", espn_player_id),
+        lambda db: db.fetchrow(f"""
+            SELECT nt.abbrev AS nfl_team, {NFL_NAME} AS nfl_team_name
+            FROM players p
+            JOIN nfl_teams nt ON nt.season = p.team_season AND nt.pro_team_id = p.pro_team_id
+            WHERE p.espn_player_id = $1""", espn_player_id),
     )
     label = names["player_name"]
     if label is None:
@@ -177,6 +199,8 @@ async def get_player(espn_player_id: int):
     return {
         "espn_player_id": espn_player_id,
         "player_name":    label,
+        "nfl_team":       now["nfl_team"] if now else None,
+        "nfl_team_name":  now["nfl_team_name"] if now else None,
         "box":            box_history(box, label),
         "draft":          draft_history(draft, label),
         "transactions":   transactions,
