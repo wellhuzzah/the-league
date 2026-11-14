@@ -2,6 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from app.database import concurrently, get_pool
+from app.nfl import current_teams, week_teams
 from app.params import top_n, without
 
 router = APIRouter(
@@ -49,6 +50,8 @@ async def get_week_boxscores(season: int, week: int, include_bench: bool = False
                 "is_starter":   row["is_starter"],
             })
 
+        # Each player's NFL team that week (app/nfl.py)
+        await week_teams([p for t in teams.values() for p in t["players"]], db, season=season, week=week)
         return {
             "season": season,
             "week":   week,
@@ -168,7 +171,9 @@ async def get_random_player():
         """)
     if not player:
         return None
-    return await random_player_card(player)
+    card = await random_player_card(player)
+    await current_teams([card])     # the team now (app/nfl.py)
+    return card
 
 
 @router.get("/position/{position:path}/summary")
@@ -317,6 +322,7 @@ async def get_position_summary(position: str):
         """, "times_drafted DESC", "times_drafted DESC, player_name, espn_player_id", "10"), pos),
     )
     top_games, bottom_games = without(top_games), without(bottom_games)
+    await week_teams(top_games + bottom_games)     # NFL team that week (app/nfl.py)
     most_rostered, most_drafted = without(most_rostered), without(most_drafted)
 
     return {

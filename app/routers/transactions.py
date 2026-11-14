@@ -1,6 +1,7 @@
 import json
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
+from app.nfl import week_teams
 from app.params import Limit, top_n, without
 
 router = APIRouter(
@@ -66,6 +67,7 @@ async def _transaction_rows(db, where, *args):
 		SELECT
 			t.id,
 			t.espn_txn_id,
+			t.season,
 			t.week,
 			t.type,
 			t.status,
@@ -114,6 +116,12 @@ async def _transaction_rows(db, where, *args):
 			"from_owner":     i["from_owner"],
 			"to_owner":       i["to_owner"],
 		})
+	# each player's NFL team in the transaction's week (app/nfl.py)
+	season_week = {r["id"]: (r["season"], r["week"]) for r in rows}
+	keyed = [dict(it, season=season_week[t][0], week=season_week[t][1], _item=it)
+	         for t, its in by_txn.items() for it in its]
+	for k in await week_teams(keyed, db):
+		k["_item"]["nfl_team"], k["_item"]["nfl_team_name"] = k["nfl_team"], k["nfl_team_name"]
 
 	return [
 		{
@@ -248,7 +256,7 @@ async def player_transactions(db, espn_player_id, label):
 		                   "names": sorted({r["player_name"] for r in rows})}],
 		"times_added":   sum(1 for r in rows if r["item_type"] == "ADD"),
 		"times_dropped": sum(1 for r in rows if r["item_type"] == "DROP"),
-		"results":       [dict(row) for row in rows],
+		"results":       await week_teams([dict(row) for row in rows], db),
 	}
 
 
@@ -279,7 +287,7 @@ async def biggest_bids(db, limit, season=None):
 async def get_biggest_bids(limit: int = Limit(25), season: int = None):
 	"""Top winning (EXECUTED) WAIVER bids."""
 	async with (await get_pool()).acquire() as db:
-		return without(await biggest_bids(db, limit, season), "place", "espn_txn_id")
+		return await week_teams(without(await biggest_bids(db, limit, season), "place", "espn_txn_id"), db)
 
 
 @router.get("/records/biggest-losing-bids")
@@ -310,7 +318,7 @@ async def get_biggest_losing_bids(limit: int = Limit(25), season: int = None):
 			  AND t.season = ANY($2::numeric[])
 			  AND ($3::numeric IS NULL OR t.season = $3)
 		""", "bid_amount DESC", "bid_amount DESC, season, week, espn_txn_id", "$1"), limit, LOSING_BID_SEASONS, season)
-		return without(rows, "place", "espn_txn_id")
+		return await week_teams(without(rows, "place", "espn_txn_id"), db)
 
 
 @router.get("/records/biggest-overpays")
@@ -361,7 +369,7 @@ async def get_biggest_overpays(limit: int = Limit(25), season: int = None):
 			) r ON TRUE
 			LEFT JOIN teams rt ON rt.team_id = r.team_id
 		""", "overpay DESC", "overpay DESC, bid_amount DESC, season, week, espn_txn_id", "$1"), limit, LOSING_BID_SEASONS, season)
-		return without(rows, "place", "espn_txn_id")
+		return await week_teams(without(rows, "place", "espn_txn_id"), db)
 
 
 # sort -> (ranked value, full order). Every pickup tied with the last one on the ranked value is kept.
@@ -442,7 +450,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 			WHERE s.games >= GREATEST($2, 1)
 		""", *_BARGAIN_SORTS[sort], "$4"), paid, min_games, season, limit)
 		rows = without(rows, "place", "id")
-		return [
+		return await week_teams([
 			{
 				**dict(row),
 				"points":            float(row["points"]),
@@ -450,7 +458,7 @@ async def get_bargains(paid: bool = True, min_games: int = 3, sort: str = "ppg",
 				"points_per_dollar": float(row["points_per_dollar"]) if row["points_per_dollar"] is not None else None,
 			}
 			for row in rows
-		]
+		], db)
 
 
 async def most_contested(db, limit, season=None):
@@ -494,4 +502,4 @@ async def get_most_contested(limit: int = Limit(25), season: int = None):
 	A pickup only one team claimed wasn't contested and isn't listed."""
 	async with (await get_pool()).acquire() as db:
 		rows = await most_contested(db, limit, season)
-		return [{**row, "bids": json.loads(row["bids"])} for row in without(rows)]
+		return await week_teams([{**row, "bids": json.loads(row["bids"])} for row in without(rows)], db)

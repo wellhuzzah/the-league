@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from app.database import concurrently, get_pool
+from app.nfl import season_teams
 from app.routers.teams import win_pct
 
 router = APIRouter(
@@ -251,13 +252,15 @@ async def top_scorer(db, year):
     """, year)
     if not row:
         return None
-    return {
+    scorer = {
         "espn_player_id": row["espn_player_id"],
         "player_name":  row["player_name"],
         "position":     row["position"],
         "owner":        row["owner"],
         "total_points": float(row["total_points"]),
     }
+    # every NFL team he had that season, "OAK→DAL" (app/nfl.py)
+    return (await season_teams([scorer], db, season=year))[0]
 
 
 @router.get("/{year}")

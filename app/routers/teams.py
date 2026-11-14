@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from app.database import concurrently, get_pool
 from app.params import top_n, without
+from app.nfl import week_teams
 
 router = APIRouter(
     prefix="/teams",
@@ -237,7 +238,8 @@ async def get_team(team_id: int):
             }
             for row in h2h
         ],
-        "best_weeks": [{**row, "points_scored": float(row["points_scored"])}
-                       for row in without(best_weeks)],
+        # each with the player's NFL team that week (app/nfl.py)
+        "best_weeks": await week_teams([{**row, "points_scored": float(row["points_scored"])}
+                                        for row in without(best_weeks)]),
         "position_totals": list(by_season.values()),
     }

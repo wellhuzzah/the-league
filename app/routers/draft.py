@@ -1,6 +1,7 @@
 from collections import defaultdict
 from fastapi import APIRouter, HTTPException
 from app.database import get_pool
+from app.nfl import draft_teams
 from app.params import Limit
 
 router = APIRouter(
@@ -183,6 +184,8 @@ async def get_value_history(limit: int = Limit(25)):
         key=lambda p: p["season_points"]
     ), limit, "season_points")
 
+    # NFL team in Week 1 of the pick's season (app/nfl.py)
+    await draft_teams(steals + busts)
     return {"steals": steals, "busts": busts}
 
 
@@ -228,6 +231,9 @@ async def get_draft(year: int):
         steal = max(candidates, key=lambda p: p["value_gap"]) if candidates else None
         early = [p for p in picks if p["round_num"] <= 2]
         bust  = min(early, key=lambda p: p["season_points"]) if early else None
+
+    # Every pick's NFL team in Week 1 of the season, the team he was drafted from (app/nfl.py)
+    await draft_teams([p for r in rounds.values() for p in r] + picks, season=year)
 
     return {
         "season": year,

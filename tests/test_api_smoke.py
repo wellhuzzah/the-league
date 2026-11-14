@@ -103,7 +103,7 @@ SHAPES = {
 	'/boxscores/week/2025/5': ("dict", ['season', 'teams', 'week']),
 	'/boxscores/week/2025/5?include_bench=true': ("dict", ['season', 'teams', 'week']),
 	'/boxscores/week/2021/1?team_id=1&team_id=2': ("dict", ['season', 'teams', 'week']),
-	'/boxscores/random-player': ("dict", ['appearances', 'avg_points', 'best_game', 'best_game_detail', 'draft', 'espn_player_id', 'player_name', 'position', 'seasons', 'top_owner', 'total_points', 'worst_game']),
+	'/boxscores/random-player': ("dict", ['appearances', 'avg_points', 'best_game', 'best_game_detail', 'draft', 'espn_player_id', 'nfl_team', 'nfl_team_name', 'player_name', 'position', 'seasons', 'top_owner', 'total_points', 'worst_game']),
 	'/boxscores/position/WR/summary': ("dict", ['bottom_games', 'by_season', 'draft', 'draft_by_season', 'most_drafted', 'most_rostered', 'position', 'scoring', 'top_games']),
 	'/boxscores/position/D%2FST/summary': ("dict", ['bottom_games', 'by_season', 'draft', 'draft_by_season', 'most_drafted', 'most_rostered', 'position', 'scoring', 'top_games']),
 	'/players/search?q=Josh%20Allen': ("dict", ['players', 'query']),
@@ -118,12 +118,12 @@ SHAPES = {
 	'/transactions/season/2025/week/5': ("dict", ['season', 'transactions', 'week']),
 	'/transactions/team/1/season/2025': ("dict", ['owner', 'season', 'team_id', 'transactions']),
 	'/transactions/team/1': ("dict", ['owner', 'seasons', 'team_id']),
-	'/transactions/records/biggest-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'owner', 'player_name', 'position', 'season', 'team_id', 'week'], 25),
-	'/transactions/records/biggest-losing-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'owner', 'player_name', 'position', 'season', 'status', 'team_id', 'week', 'winner_owner', 'winning_bid'], 25),
-	'/transactions/records/biggest-overpays': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'overpay', 'owner', 'player_name', 'position', 'runner_up_bid', 'runner_up_owner', 'season', 'team_id', 'week'], 25),
-	'/transactions/records/bargains': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
-	'/transactions/records/bargains?paid=false&season=2025': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
-	'/transactions/records/most-contested': ("list", ['bids', 'claims', 'espn_player_id', 'player_name', 'position', 'run_date', 'season', 'teams', 'week', 'winner_owner', 'winning_bid'], 25),
+	'/transactions/records/biggest-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'nfl_team', 'nfl_team_name', 'owner', 'player_name', 'position', 'season', 'team_id', 'week'], 25),
+	'/transactions/records/biggest-losing-bids': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'nfl_team', 'nfl_team_name', 'owner', 'player_name', 'position', 'season', 'status', 'team_id', 'week', 'winner_owner', 'winning_bid'], 25),
+	'/transactions/records/biggest-overpays': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'nfl_team', 'nfl_team_name', 'overpay', 'owner', 'player_name', 'position', 'runner_up_bid', 'runner_up_owner', 'season', 'team_id', 'week'], 25),
+	'/transactions/records/bargains': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'nfl_team', 'nfl_team_name', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
+	'/transactions/records/bargains?paid=false&season=2025': ("list", ['bid_amount', 'espn_player_id', 'event_at', 'games', 'nfl_team', 'nfl_team_name', 'owner', 'player_name', 'points', 'points_per_dollar', 'position', 'ppg', 'season', 'team_id', 'type', 'week'], 25),
+	'/transactions/records/most-contested': ("list", ['bids', 'claims', 'espn_player_id', 'nfl_team', 'nfl_team_name', 'player_name', 'position', 'run_date', 'season', 'teams', 'week', 'winner_owner', 'winning_bid'], 25),
 }
 
 

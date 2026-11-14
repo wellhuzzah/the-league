@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from app.database import concurrently, get_pool
+from app.nfl import current_teams
 from app.params import like_escape, search_term
 from app.routers.transactions import player_transactions
 
@@ -101,7 +102,8 @@ async def search_players(q: str = Query(...)):
             JOIN yrs y ON y.espn_player_id = f.espn_player_id
             ORDER BY f.box_ord NULLS LAST, f.draft_ord
         """, f"%{like_escape(term)}%", SEARCH_LIMIT)
-    return {"query": q, "players": [dict(r) for r in rows]}
+    # each with the player's NFL team now (app/nfl.py)
+    return {"query": q, "players": await current_teams([dict(r) for r in rows])}
 
 
 def box_history(rows, label):
