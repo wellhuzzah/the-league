@@ -344,6 +344,47 @@ class Adjustments(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# teams (nfl_team_import.py)
+# --------------------------------------------------------------------------- #
+class Teams(unittest.TestCase):
+	@classmethod
+	def setUpClass(cls):
+		code, cls.out = captured("20261113T000000Z_teams_dry.txt")
+		assert code == 0 and '"league_rows_without_team": 13,' in cls.out, "11-13 teams fixture changed"
+
+	def test_1113_passes(self):
+		problems, info = wm.check_teams(self.out, 2026)
+		self.assertEqual(problems, [])
+		self.assertEqual((info["rows"], info["without"], info["league"], info["players"], info["warnings"]),
+		                 (3258, 13, 2823, 1248, 0))
+
+	def test_too_many_rows_without_a_team_fails(self):
+		out = swap(self.out, '"league_rows_without_team": 13,', '"league_rows_without_team": 90,')
+		self.assertEqual(wm.check_teams(out, 2026)[0], ["90/2823 league rows without an NFL team (limit 2%)"])
+
+	def test_mass_delete_fails(self):
+		out = swap(self.out, '"delete": 0\n    }\n  },', '"delete": 100\n    }\n  },')
+		self.assertEqual(wm.check_teams(out, 2026)[0], ["100 of 3258 stored player_team_weeks rows would be removed"])
+
+	def test_shrunken_player_pool_fails(self):
+		out = swap(self.out, '"rows": 1248,', '"rows": 900,')
+		self.assertEqual(wm.check_teams(out, 2026)[0], ["players: 900 rows vs 1248 stored"])
+
+	def test_warnings_are_counted_not_fatal(self):
+		out = swap(self.out, "No warnings.\n", "=== WARNINGS (1) ===\n  - nflverse roster_weekly_2026: HTTP 503, using the saved copy\n")
+		problems, info = wm.check_teams(out, 2026)
+		self.assertEqual((problems, info["warnings"]), ([], 1))
+
+	def test_wrong_season_is_unreadable(self):
+		with self.assertRaisesRegex(wm.Unreadable, "summary"):
+			wm.check_teams(self.out, 2025)
+
+	def test_missing_warnings_line_is_unreadable(self):
+		with self.assertRaisesRegex(wm.Unreadable, "warnings"):
+			wm.check_teams(swap(self.out, "No warnings.\n", ""), 2026)
+
+
+# --------------------------------------------------------------------------- #
 # heads-up post and "new since the last ok run"
 # --------------------------------------------------------------------------- #
 class HeadsUp(unittest.TestCase):

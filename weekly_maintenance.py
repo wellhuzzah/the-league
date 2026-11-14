@@ -6,6 +6,8 @@ Steps, in order, each independent (a failure is logged and the next step still r
 	feed     activity_feed_archive.py (snapshot + D: copy + GitHub push)
 	scores   espn_import.py --season S             (matchups, box_scores, draft_picks)
 	waivers  espn_transactions_import.py --season S (transactions, transaction_items)
+	teams    nfl_team_import.py --season S          (player_team_weeks, nfl_teams, players; reads
+	         the ESPN archive the scores step just wrote, plus nflverse's weekly rosters)
 	backup   nightly_backup.py --push   (fresh pg_dump; redacted SQL copy to rockwood-archive)
 	analyze  SELECT rockwood_analyze()  (planner statistics; the function runs ANALYZE as its
 	         owner, postgres, since rockwood_writer can't ANALYZE tables it doesn't own on PG 16)
@@ -18,8 +20,8 @@ log line, and a new one gets a one-line heads-up post):
 	scores   an empty starting slot (fewer than 9 starters) whose points still add up to ESPN's
 	waivers  FAAB moved in a completed trade: the archived activity feed (type 290 messages) plus
 	         faab_adjustments.json must explain ESPN's spent budget exactly, for every team
-The checks themselves are pure functions (check_scores, check_waivers), tested offline by
-tests/test_guardrails.py.
+The checks themselves are pure functions (check_scores, check_waivers, check_teams), tested offline
+by tests/test_guardrails.py.
 
 Outside the season (February-August) the imports are skipped; the feed step keeps running until
 ESPN removes the feed (activity_feed_archive.py exit 3), which is then logged as information.
@@ -28,7 +30,7 @@ One line per step per run goes to weekly_maintenance.log (gitignored). Each step
 kept in maintenance_output/ (gitignored) for when a guardrail trips.
 
 Exit code: 0 if every step passed or was skipped; otherwise the sum of 1 (feed), 2 (scores),
-4 (waivers), 8 (backup), 16 (analyze) for the steps that failed.
+4 (waivers), 8 (backup), 16 (analyze), 32 (teams) for the steps that failed.
 
 Notifications (optional, set in .env; nothing is sent when unset):
 	NOTIFY_WEBHOOK_URL  Discord or Slack incoming webhook (or an ntfy topic URL). Posted when a
@@ -71,7 +73,7 @@ from espn_raw import RAW_DIR, load_archived  # noqa: E402
 PYTHON = sys.executable
 LOG = os.path.join(HERE, "weekly_maintenance.log")
 OUTPUT_DIR = os.path.join(HERE, "maintenance_output")
-STEP_BITS = {"feed": 1, "scores": 2, "waivers": 4, "backup": 8, "analyze": 16}
+STEP_BITS = {"feed": 1, "scores": 2, "waivers": 4, "backup": 8, "analyze": 16, "teams": 32}
 
 REG_SEASON_WEEKS = 13          # weeks 14+ are playoffs (matches espn_import.py)
 STARTERS_PER_TEAM = 9
@@ -79,6 +81,9 @@ MAX_NEW_WEEKS = 2              # one new week normally; two covers one missed ru
 ROWS_TOLERANCE = 0.15          # new week's box_scores rows vs the median stored week
 MAX_POINT_CORRECTIONS = 40     # stat corrections allowed, and only in the latest stored week
 MAX_NEW_TRANSACTIONS = 150     # busiest week on record is 47
+MAX_TEAMLESS = 0.02            # league rows (box score, transaction, draft) with no NFL team; ~0.5% at launch
+MAX_TEAM_DELETES = 0.02        # share of the season's stored player_team_weeks rows one run may remove
+MIN_PLAYERS_KEPT = 0.9         # players (team now) rows a run must keep, against those stored
 
 # The only importer warning the scores step lets through (espn_import.py, box scores)
 EMPTY_SLOT = re.compile(r"box wk(\d+) team (\d+): (\d+) starters \(expected 9\) \u2014 empty lineup slot\(s\)\.")
@@ -440,6 +445,37 @@ def check_waivers(out, db_rows, db_week, feed, manual):
 	return problems, {"kept": kept, "latest": latest, "trades": feed or {}, "manual": manual}
 
 
+def check_teams(out, season):
+	"""(problems, info) for an nfl_team_import.py dry run of one season. Its warnings (nflverse
+	contradicting ESPN for a player, a failed nflverse download that fell back to the saved copy) are
+	reported, not fatal: the importer already left those rows to the safer source."""
+	try:
+		summary = json.loads(out.split("=== SUMMARY ===", 1)[1].split("\n\n", 1)[0])
+		s = summary["seasons"][str(season)]
+		players = summary.get("players")
+		rows, without, league = s["rows"], s["league_rows_without_team"], s["league_rows"]
+		stored, deletes = s["stored_before"], s["delete"]
+	except (IndexError, ValueError, KeyError, TypeError):
+		raise Unreadable("could not read the dry run summary")
+	m = re.search(r"^=== WARNINGS \((\d+)\) ===$", out, re.M)
+	warnings = int(m.group(1)) if m else 0
+	if not m and "\nNo warnings." not in out:
+		raise Unreadable("could not read the dry run warnings")
+
+	problems = []
+	if league and without > MAX_TEAMLESS * league:
+		problems.append(f"{without}/{league} league rows without an NFL team (limit {MAX_TEAMLESS:.0%})")
+	if stored and deletes > MAX_TEAM_DELETES * stored:
+		problems.append(f"{deletes} of {stored} stored player_team_weeks rows would be removed")
+	if players is None:
+		problems.append("no players (team now) section: is this the latest season?")
+	elif players["stored_before"] and players["rows"] < MIN_PLAYERS_KEPT * players["stored_before"]:
+		problems.append(f"players: {players['rows']} rows vs {players['stored_before']} stored")
+	return problems, {"rows": rows, "without": without, "league": league, "warnings": warnings,
+	                  "players": (players or {}).get("rows"), "nflverse": s.get("nflverse"),
+	                  "change": f"+{s['insert']} ~{s['update']} -{deletes}"}
+
+
 # --------------------------------------------------------------------------- #
 # steps
 # --------------------------------------------------------------------------- #
@@ -543,6 +579,35 @@ def step_waivers(season, accept):
 	return True
 
 
+def step_teams(season, accept):
+	code, out = run("teams", "dry", ["nfl_team_import.py", "--season", str(season), "--dry-run"])
+	if code:
+		log("teams", "FAIL", f"dry run exit={code}: {last_line(out)}")
+		return False
+	try:
+		problems, info = check_teams(out, season)
+	except Unreadable as e:
+		log("teams", "FAIL", f"guardrail: {e}; nothing written")
+		return False
+	if guardrail_tripped("teams", problems, accept):
+		return False
+
+	code, out = run("teams", "live", ["nfl_team_import.py", "--season", str(season)])
+	if code:
+		log("teams", "FAIL", f"live run exit={code}: {last_line(out)}")
+		return False
+	after = query("SELECT COUNT(*) n FROM player_team_weeks WHERE season = $1", season)[0]["n"]
+	players = query("SELECT COUNT(*) n FROM players")[0]["n"]
+	if after != info["rows"] or players != info["players"]:
+		log("teams", "FAIL", f"post-check: player_team_weeks {after} vs dry run {info['rows']}; "
+		                     f"players {players} vs {info['players']}")
+		return False
+	log("teams", "ok", f"player_team_weeks {after} ({info['change']}) | without a team "
+	                   f"{info['without']}/{info['league']} league rows | players {players} | "
+	                   f"nflverse {info['nflverse']}" + (f" | {info['warnings']} warnings, see output" if info["warnings"] else ""))
+	return True
+
+
 def step_backup():
 	code, out = run("backup", "run", ["nightly_backup.py", "--push"])
 	if code:
@@ -613,7 +678,7 @@ def notify(failed, stale_days):
 
 def main():
 	ap = argparse.ArgumentParser(description="Weekly ESPN upkeep (feed snapshot, score and waiver imports).")
-	ap.add_argument("--accept-diffs", action="append", default=[], choices=["scores", "waivers"],
+	ap.add_argument("--accept-diffs", action="append", default=[], choices=["scores", "waivers", "teams"],
 	                help="interactive only: allow overriding tripped guardrails for this step")
 	accept = set(ap.parse_args().accept_diffs)
 
@@ -623,10 +688,12 @@ def main():
 	failed = []
 	steps = [("feed", lambda: step_feed(season, today))]
 	if in_season(today, season):
-		steps += [("scores", lambda: step_scores(season, accept)), ("waivers", lambda: step_waivers(season, accept))]
+		steps += [("scores", lambda: step_scores(season, accept)), ("waivers", lambda: step_waivers(season, accept)),
+		          ("teams", lambda: step_teams(season, accept))]
 	else:
 		log("scores", "skip", f"off-season ({season} season)")
 		log("waivers", "skip", f"off-season ({season} season)")
+		log("teams", "skip", f"off-season ({season} season)")
 	steps += [("backup", step_backup), ("analyze", step_analyze)]    # analyze stays last
 	for name, fn in steps:
 		try:

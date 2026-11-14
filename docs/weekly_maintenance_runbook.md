@@ -18,7 +18,10 @@ cd C:\projects\rockwood
 venv\Scripts\python.exe weekly_maintenance.py                        # normal run
 venv\Scripts\python.exe espn_import.py --season 2026 --dry-run       # look without writing
 venv\Scripts\python.exe weekly_maintenance.py --accept-diffs scores  # override, see below
+venv\Scripts\python.exe nfl_team_import.py --season 2026 --dry-run   # NFL teams, look without writing
 ```
+
+`--accept-diffs` takes `scores`, `waivers` or `teams`.
 
 Only use `--accept-diffs <step>` once you know why the guardrail tripped and that ESPN is right.
 It shows the problems and needs `ACCEPT` typed; the override is logged as a `warn` line. It is
@@ -97,6 +100,30 @@ If ESPN shows a FAAB transfer the feed never will (e.g. the feed was lost), conf
 ```
 
 Don't add a trade the feed already shows; it would be counted twice and fail.
+
+## Teams step (`nfl_team_import.py`)
+
+Runs after the waivers step, in season only. It reads the ESPN responses the scores step just archived
+plus nflverse's weekly roster file for the season (downloaded each run, saved under
+`espn_raw\nflverse\`), and rewrites that season's `player_team_weeks`, the season's `nfl_teams` and
+`players` (each league player's team now). It never calls ESPN.
+
+| Guardrail | Meaning | Check |
+|---|---|---|
+| dry run exit | Missing archive file (no `kona_player_info` or `proTeamSchedules_wl` for the season), an nflverse team abbreviation it doesn't know, no nflverse copy at all, or a DB error | Last lines of the `teams_dry` output. A new abbreviation (a relocation) goes in `NFLVERSE_TEAM`. |
+| could not read the dry run summary / warnings | Importer output changed shape, or the season isn't in it | Was `nfl_team_import.py` edited? |
+| N/M league rows without an NFL team (limit 2%) | Far more box score, transaction or draft rows than usual (about 0.5%) have no team | nflverse file empty or stale (`nflverse` in the log line says `saved copy`)? ESPN responses missing stat lines? |
+| N of M stored rows would be removed | Rows for past weeks vanishing | A transaction or box score row removed upstream, or a partial nflverse file. Compare the dry run's numbers with the last `ok` line. |
+| players: N rows vs M stored | The current-season player pool shrank | A partial `kona_player_info`; retry next week. |
+| no players section | The season run isn't the latest one in `draft_picks` | Season rollover in progress. |
+| post-check | Database doesn't match the dry run | Look at the `teams_live` output. |
+
+**Warnings are not fatal**, only counted on the `ok` line: nflverse contradicting a week ESPN shows the
+player playing (nflverse is then ignored for him that season; it has mixed up same-name players), a
+failed nflverse download (the saved copy is used), or an ESPN id nflverse gives to two people.
+
+Rebuild everything (after changing the rules): `venv\Scripts\python.exe nfl_team_import.py --all`
+(dry run first with `--dry-run`).
 
 ## Backup step (`nightly_backup.py --push`)
 

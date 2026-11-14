@@ -9,6 +9,7 @@ __pycache__/
 !/espn_transactions_import.py
 !/activity_feed_archive.py
 !/weekly_maintenance.py
+!/nfl_team_import.py
 !/ddns_update.py
 !/nightly_backup.py
 /weekly_maintenance.log
@@ -26,6 +27,8 @@ __pycache__/
 !/scripts/rollback_records_audit.sql
 !/scripts/tower_overhaul.sql
 !/scripts/rollback_tower_overhaul.sql
+!/scripts/nfl_teams.sql
+!/scripts/rollback_nfl_teams.sql
 /espn_raw/
 /backups/
 /docs/*

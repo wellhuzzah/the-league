@@ -1,0 +1,53 @@
+$ nfl_team_import.py --season 2026 --dry-run
+exit=0
+
+=== NFL team import, seasons 2026-2026, DRY RUN (no DB writes) ===
+[2026] 3258 rows {'dst_id': 300, 'espn': 2119, 'nflverse': 650, 'gap_fill': 150, 'bye': 39} | without a team: 13/2823 league rows | +0 ~0 -0
+[players] 1248 of 1268 league players in the 2026 pool, 703 on a team | ~0 -0
+
+=== SUMMARY ===
+{
+  "seasons": {
+    "2026": {
+      "weeks": "1-10",
+      "players": 332,
+      "rows": 3258,
+      "by_source": {
+        "dst_id": 300,
+        "espn": 2119,
+        "nflverse": 650,
+        "gap_fill": 150,
+        "bye": 39
+      },
+      "league_rows": 2823,
+      "league_rows_without_team": 13,
+      "conflicts": 0,
+      "nflverse": "downloaded",
+      "nflverse_counts": {
+        "rows_without_espn_id": 55,
+        "players_via_crosswalk": 440
+      },
+      "stored_before": 3258,
+      "insert": 0,
+      "update": 0,
+      "delete": 0
+    }
+  },
+  "nflverse_players": "downloaded",
+  "players": {
+    "file": "20261112T130048768559Z_200.json.gz",
+    "league_players": 1268,
+    "rows": 1248,
+    "with_team": 703,
+    "stored_before": 1248,
+    "insert_or_update": 0,
+    "delete": 0
+  }
+}
+
+No warnings.
+
+
+(DRY RUN: nothing was written to the database.)
+
+--- stderr ---

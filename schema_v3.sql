@@ -279,3 +279,47 @@ BEGIN;
 ALTER TABLE draft_picks ALTER COLUMN espn_player_id SET NOT NULL;
 ALTER TABLE box_scores  ALTER COLUMN espn_player_id SET NOT NULL;
 COMMIT;
+
+-- ===========================================================================
+-- 11. NFL teams: nfl_teams, player_team_weeks, players   (2026-11-13, NFL team data phase 1)
+-- ===========================================================================
+-- Each player's NFL team per week, the team list per season, and each league player's team now.
+-- nfl_team_import.py fills all three (rockwood_writer) from the ESPN archive and nflverse's weekly
+-- rosters; the weekly job's teams step runs it. No row in player_team_weeks = unknown. Rules and
+-- evidence: docs/nfl_team_handoff.md. box_scores.nfl_team (varchar, always NULL) stays unused.
+-- Applied by scripts\nfl_teams.sql. Undo: scripts\rollback_nfl_teams.sql (drops the three tables).
+
+BEGIN;
+
+CREATE TABLE nfl_teams (
+	season       SMALLINT    NOT NULL,
+	pro_team_id  SMALLINT    NOT NULL,
+	abbrev       VARCHAR(4)  NOT NULL,
+	location     VARCHAR(40) NOT NULL,
+	name         VARCHAR(40) NOT NULL,
+	bye_week     SMALLINT,
+	PRIMARY KEY (season, pro_team_id)
+);
+
+CREATE TABLE player_team_weeks (
+	espn_player_id  INTEGER     NOT NULL,
+	season          SMALLINT    NOT NULL,
+	week            SMALLINT    NOT NULL,
+	pro_team_id     SMALLINT    NOT NULL,
+	source          VARCHAR(10) NOT NULL CHECK (source IN ('espn', 'nflverse', 'gap_fill', 'bye', 'dst_id')),
+	PRIMARY KEY (espn_player_id, season, week),
+	FOREIGN KEY (season, pro_team_id) REFERENCES nfl_teams
+);
+CREATE INDEX idx_player_team_weeks_season_week ON player_team_weeks (season, week);
+
+CREATE TABLE players (
+	espn_player_id  INTEGER     PRIMARY KEY,
+	pro_team_id     SMALLINT,
+	team_season     SMALLINT    NOT NULL,
+	updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+	FOREIGN KEY (team_season, pro_team_id) REFERENCES nfl_teams
+);
+
+GRANT INSERT, UPDATE, DELETE ON nfl_teams, player_team_weeks, players TO rockwood_writer;
+
+COMMIT;
